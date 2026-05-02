@@ -112,9 +112,22 @@ def _agent_clients(agent):
 
 
 def _replace_backend_history(agent, history):
-    backend = getattr(getattr(agent, 'llmclient', None), 'backend', None)
-    if backend is not None and hasattr(backend, 'history'):
-        backend.history = list(history or [])
+    shared = list(history or [])
+    if hasattr(agent, '_llm_history'):
+        agent._llm_history = shared
+    if hasattr(agent, '_bind_shared_history'):
+        agent._bind_shared_history()
+    else:
+        backend = getattr(getattr(agent, 'llmclient', None), 'backend', None)
+        if backend is not None and hasattr(backend, 'history'):
+            backend.history = shared
+
+
+def extend_agent_history(agent, lines):
+    if hasattr(agent, 'extend_agent_history'):
+        agent.extend_agent_history(lines or [])
+    elif hasattr(agent, 'history'):
+        agent.history.extend(lines or [])
 
 
 def _current_log_path(pid=None):
@@ -154,10 +167,16 @@ def reset_conversation(agent, message='🆕 已开启新对话，当前上下文
     _snapshot_current_log()
     if hasattr(agent, 'history'):
         agent.history = []
+    if hasattr(agent, '_llm_history'):
+        agent._llm_history = []
+    if hasattr(agent, '_bind_shared_history'):
+        agent._bind_shared_history()
+    else:
+        for client in _agent_clients(agent):
+            backend = getattr(client, 'backend', None)
+            if backend is not None and hasattr(backend, 'history'):
+                backend.history = []
     for client in _agent_clients(agent):
-        backend = getattr(client, 'backend', None)
-        if backend is not None and hasattr(backend, 'history'):
-            backend.history = []
         if hasattr(client, 'last_tools'):
             client.last_tools = ''
     if hasattr(agent, 'handler'):
@@ -180,17 +199,18 @@ def restore(agent, path):
     except Exception as e: return f'❌ 读取失败: {e}', False
     pairs = _pairs(content)
     if not pairs: return f'❌ {os.path.basename(path)} 为空或格式不符', False
+    from chatapp_common import _restore_native_history, _restore_text_pairs
     history = _parse_native_history(pairs)
     name = os.path.basename(path)
     if history is not None:
         agent.abort()
         _replace_backend_history(agent, history)
+        extend_agent_history(agent, _restore_text_pairs(content) or _restore_native_history(content))
         return f'✅ 已恢复 {len(pairs)} 轮完整对话（{name}）\n(已写入 backend.history，可直接继续)', True
-    from chatapp_common import _restore_native_history, _restore_text_pairs
     summary = _restore_text_pairs(content) or _restore_native_history(content)
     if not summary: return f'❌ {name} 无法解析（非 native 且无摘要可提取）', False
     agent.abort()
-    agent.history.extend(summary)
+    extend_agent_history(agent, summary)
     n = sum(1 for l in summary if l.startswith('[USER]: '))
     return f'⚠️ 非 native 格式，已降级恢复 {n} 轮摘要（{name}）\n(请输入新问题继续)', False
 

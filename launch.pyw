@@ -88,7 +88,7 @@ if __name__ == '__main__':
     parser.add_argument('--wecom', action='store_true', help='启动 WeCom Bot');
     parser.add_argument('--dingtalk', '--dt', dest='dingtalk', action='store_true', help='启动 DingTalk Bot');
     parser.add_argument('--sched', action='store_true', help='启动计划任务调度器')
-    parser.add_argument('--llm_no', type=int, default=0, help='LLM编号')
+    parser.add_argument('--llm_no', type=int, default=None, help='LLM编号')
     args = parser.parse_args()
     port = str(find_free_port()) if args.port == '0' else args.port
     print(f'[Launch] Using port {port}')
@@ -125,7 +125,9 @@ if __name__ == '__main__':
     else: print('[Launch] DingTalk Bot not enabled (use --dingtalk to start)')
     
     if args.sched:
-        scheduler_proc = subprocess.Popen([sys.executable, os.path.join(script_dir, "agentmain.py"), "--reflect", os.path.join(script_dir, "reflect", "scheduler.py"), "--llm_no", str(args.llm_no)], creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        sched_cmd = [sys.executable, os.path.join(script_dir, "agentmain.py"), "--reflect", os.path.join(script_dir, "reflect", "scheduler.py")]
+        if args.llm_no is not None: sched_cmd += ["--llm_no", str(args.llm_no)]
+        scheduler_proc = subprocess.Popen(sched_cmd, creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
         atexit.register(scheduler_proc.kill)
         print('[Launch] Task Scheduler started (duplicate prevented by scheduler port lock)')
     else: print('[Launch] Task Scheduler not enabled (--sched)')

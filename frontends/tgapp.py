@@ -24,7 +24,7 @@ from chatapp_common import (
     require_runtime,
     split_text,
 )
-from continue_cmd import handle_frontend_command, reset_conversation
+from continue_cmd import extend_agent_history, handle_frontend_command, reset_conversation
 from llmcore import mykeys
 
 agent = GeneraticAgent()
@@ -814,8 +814,8 @@ async def cmd_llm(update, ctx):
     if len(args) > 1:
         try:
             n = int(args[1])
-            agent.next_llm(n)
-            await update.message.reply_text(f"✅ 已切换到 [{agent.llm_no}] {agent.get_llm_name()}")
+            info = agent.switch_llm(n, persist=True)
+            await update.message.reply_text(f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)")
         except (ValueError, IndexError):
             await update.message.reply_text(f"用法: /llm <0-{len(agent.list_llms())-1}>")
     else:
@@ -856,6 +856,9 @@ async def handle_command(update, ctx):
         return await update.message.reply_text(f"状态: {'🔴 运行中' if agent.is_running else '🟢 空闲'}\nLLM: [{agent.llm_no}] {llm}")
     if op == '/stop': return await cmd_abort(update, ctx)
     if op == '/llm': return await cmd_llm(update, ctx)
+    if op == '/next':
+        info = agent.switch_llm(-1, persist=True)
+        return await update.message.reply_text(f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)")
     if op == '/new':
         _cancel_stream_task(ctx)
         return await update.message.reply_text(reset_conversation(agent))
@@ -867,7 +870,7 @@ async def handle_command(update, ctx):
                 return await update.message.reply_text(err)
             restored, fname, count = restored_info
             agent.abort()
-            agent.history.extend(restored)
+            extend_agent_history(agent, restored)
             return await update.message.reply_text(f"✅ 已恢复 {count} 轮对话\n来源: {fname}\n(仅恢复上下文，请输入新问题继续)")
         except Exception as e:
             return await update.message.reply_text(f"❌ 恢复失败: {e}")

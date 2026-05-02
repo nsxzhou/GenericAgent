@@ -1534,7 +1534,7 @@ class ChatPanel(QWidget):
     def _do_switch_to(self, idx: int):
         if idx == self.agent.llm_no:
             return
-        self.agent.next_llm(n=idx)
+        self.agent.switch_llm(n=idx, persist=True)
         name = self._model_name()
         self._model_badge.setText(name)
         self._model_info.setText(f"当前模型：{name} (#{self.agent.llm_no})")
@@ -1678,6 +1678,41 @@ class ChatPanel(QWidget):
         text = self._input.toPlainText().strip()
         files = self._pending_files.copy()
         if not text and not files:
+            return
+        if text in ("/next",) and not files:
+            info = self.agent.switch_llm(-1, persist=True)
+            name = self._model_name()
+            self._model_badge.setText(name)
+            self._model_info.setText(f"当前模型：{name} (#{self.agent.llm_no})")
+            self._refresh_model_rows_style()
+            self._input.clear()
+            self._add_msg_row("user", text)
+            self._messages.append({"role": "user", "content": text})
+            notice = f"已切换至 {info['display']}，下次 LLM turn 生效"
+            self._add_msg_row("assistant", notice)
+            self._messages.append({"role": "assistant", "content": notice})
+            self._update_token_usage()
+            return
+        if (text == "/llm" or re.match(r"/llm\s+\d+\s*$", text)) and not files:
+            self._input.clear()
+            self._add_msg_row("user", text)
+            self._messages.append({"role": "user", "content": text})
+            if text == "/llm":
+                lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in self.agent.list_llms()]
+                reply = "LLMs:\n" + "\n".join(lines)
+            else:
+                try:
+                    info = self.agent.switch_llm(int(text.split()[1]), persist=True)
+                    name = self._model_name()
+                    self._model_badge.setText(name)
+                    self._model_info.setText(f"当前模型：{name} (#{self.agent.llm_no})")
+                    self._refresh_model_rows_style()
+                    reply = f"已切换至 {info['display']}，下次 LLM turn 生效"
+                except Exception as e:
+                    reply = f"切换失败: {e}"
+            self._add_msg_row("assistant", reply)
+            self._messages.append({"role": "assistant", "content": reply})
+            self._update_token_usage()
             return
 
         prompt = text or "请分析我上传的附件。"

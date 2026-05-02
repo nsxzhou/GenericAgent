@@ -5,7 +5,7 @@ sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
 from agentmain import GeneraticAgent
 from frontends.chatapp_common import format_restore
-from frontends.continue_cmd import handle_frontend_command as handle_continue_frontend, reset_conversation
+from frontends.continue_cmd import extend_agent_history, handle_frontend_command as handle_continue_frontend, reset_conversation
 from llmcore import mykeys
 
 import traceback
@@ -605,7 +605,7 @@ def handle_command(open_id, cmd, chat_id=None):
     elif op == "/new":
         _send_cmd_response(reset_conversation(agent))
     elif op == "/help":
-        _send_cmd_response("命令列表:\n/stop - 停止当前任务\n/status - 查看状态\n/llm - 查看当前模型列表\n/llm [n] - 切换到第 n 个模型\n/restore - 恢复上次对话历史\n/continue - 列出可恢复会话\n/continue [n] - 恢复第 n 个会话\n/new - 开启新对话并清空当前上下文\n/help - 显示帮助")
+        _send_cmd_response("命令列表:\n/stop - 停止当前任务\n/status - 查看状态\n/llm - 查看当前模型列表\n/llm [n] - 切换到第 n 个模型\n/next - 切换到下一个模型\n/restore - 恢复上次对话历史\n/continue - 列出可恢复会话\n/continue [n] - 恢复第 n 个会话\n/new - 开启新对话并清空当前上下文\n/help - 显示帮助")
     elif op == "/status":
         llm = agent.get_llm_name() if agent.llmclient else "未配置"
         _send_cmd_response(f"状态: {'🔴 运行中' if agent.is_running else '🟢 空闲'}\nLLM: [{agent.llm_no}] {llm}")
@@ -614,19 +614,22 @@ def handle_command(open_id, cmd, chat_id=None):
             return _send_cmd_response("❌ 当前没有可用的 LLM 配置")
         if len(parts) > 1:
             try:
-                agent.next_llm(int(parts[1]))
-                return _send_cmd_response(f"✅ 已切换到 [{agent.llm_no}] {agent.get_llm_name()}")
+                info = agent.switch_llm(int(parts[1]), persist=True)
+                return _send_cmd_response(f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)")
             except Exception:
                 return _send_cmd_response(f"用法: /llm <0-{len(agent.list_llms()) - 1}>")
         lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in agent.list_llms()]
         _send_cmd_response("LLMs:\n" + "\n".join(lines))
+    elif op == "/next":
+        info = agent.switch_llm(-1, persist=True)
+        _send_cmd_response(f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)")
     elif op == "/restore":
         try:
             restored_info, err = format_restore()
             if err:
                 return _send_cmd_response(err.replace("❌ ", ""))
             restored, fname, count = restored_info
-            agent.history.extend(restored)
+            extend_agent_history(agent, restored)
             agent.abort()
             _send_cmd_response(f"已恢复 {count} 轮对话\n来源: {fname}\n(仅恢复上下文，请输入新问题继续)")
         except Exception as e:

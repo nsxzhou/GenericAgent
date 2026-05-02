@@ -43,7 +43,7 @@ def render_sidebar():
     st.caption(f"LLM Core: {llm_labels.get(current_idx, str(current_idx))}", help="下拉切换备用链路")
     selected_idx = st.selectbox("备用链路", [idx for idx, _, _ in llm_options], index=next((i for i, (idx, _, _) in enumerate(llm_options) if idx == current_idx), 0), format_func=llm_labels.get, label_visibility="collapsed", key="sidebar_llm_select")
     if selected_idx != current_idx:
-        agent.next_llm(selected_idx); st.rerun(scope="fragment")
+        agent.switch_llm(selected_idx, persist=True); st.rerun(scope="fragment")
     last_reply_time = st.session_state.get('last_reply_time', 0)
     if last_reply_time > 0:
         st.caption(f"空闲时间：{int(time.time()) - last_reply_time}秒", help="当超过30分钟未收到回复时，系统会自动任务")
@@ -202,6 +202,30 @@ if prompt := st.chat_input("any task?"):
         st.rerun()
     if cmd == "/new":
         st.session_state.messages = [{"role": "assistant", "content": reset_conversation(agent), "time": ts}]
+        _reset_and_rerun()
+    if cmd == "/next":
+        info = agent.switch_llm(-1, persist=True)
+        st.session_state.sidebar_llm_select = info["index"]
+        st.session_state.messages = list(st.session_state.messages) + [
+            {"role": "user", "content": cmd, "time": ts},
+            {"role": "assistant", "content": f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", "time": ts},
+        ]
+        _reset_and_rerun()
+    if cmd == "/llm" or re.match(r'/llm\s+\d+\s*$', cmd):
+        if cmd == "/llm":
+            lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in agent.list_llms()]
+            result = "LLMs:\n" + "\n".join(lines)
+        else:
+            try:
+                info = agent.switch_llm(int(cmd.split()[1]), persist=True)
+                st.session_state.sidebar_llm_select = info["index"]
+                result = f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)"
+            except Exception as e:
+                result = f"❌ 切换失败: {e}"
+        st.session_state.messages = list(st.session_state.messages) + [
+            {"role": "user", "content": cmd, "time": ts},
+            {"role": "assistant", "content": result, "time": ts},
+        ]
         _reset_and_rerun()
     if cmd.startswith("/continue"):
         m = re.match(r'/continue\s+(\d+)\s*$', cmd.strip())

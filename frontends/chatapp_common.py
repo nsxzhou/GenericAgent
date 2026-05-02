@@ -10,6 +10,7 @@ HELP_COMMANDS = (
     ("/continue [n]", "恢复第 n 个会话"),
     ("/llm", "查看当前模型列表"),
     ("/llm [n]", "切换到第 n 个模型"),
+    ("/next", "切换到下一个模型"),
 )
 TELEGRAM_MENU_COMMANDS = (
     ("help", "显示帮助"),
@@ -19,6 +20,7 @@ TELEGRAM_MENU_COMMANDS = (
     ("restore", "恢复上次对话历史"),
     ("continue", "列出可恢复会话；/continue n 恢复第 n 个"),
     ("llm", "查看模型列表；/llm n 切换到指定模型"),
+    ("next", "切换到下一个模型"),
 )
 
 
@@ -279,12 +281,17 @@ class AgentChatMixin:
                 return await self.send_text(chat_id, "❌ 当前没有可用的 LLM 配置", **ctx)
             if len(parts) > 1:
                 try:
-                    self.agent.next_llm(int(parts[1]))
-                    return await self.send_text(chat_id, f"✅ 已切换到 [{self.agent.llm_no}] {self.agent.get_llm_name()}", **ctx)
+                    info = self.agent.switch_llm(int(parts[1]), persist=True)
+                    return await self.send_text(chat_id, f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", **ctx)
                 except Exception:
                     return await self.send_text(chat_id, f"用法: /llm <0-{len(self.agent.list_llms()) - 1}>", **ctx)
             lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in self.agent.list_llms()]
             return await self.send_text(chat_id, "LLMs:\n" + "\n".join(lines), **ctx)
+        if op == "/next":
+            if not self.agent.llmclient:
+                return await self.send_text(chat_id, "❌ 当前没有可用的 LLM 配置", **ctx)
+            info = self.agent.switch_llm(-1, persist=True)
+            return await self.send_text(chat_id, f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", **ctx)
         if op == "/restore":
             try:
                 restored_info, err = format_restore()
@@ -292,7 +299,7 @@ class AgentChatMixin:
                     return await self.send_text(chat_id, err, **ctx)
                 restored, fname, count = restored_info
                 self.agent.abort()
-                self.agent.history.extend(restored)
+                _extend_agent_history(self.agent, restored)
                 return await self.send_text(chat_id, f"✅ 已恢复 {count} 轮对话\n来源: {fname}\n(仅恢复上下文，请输入新问题继续)", **ctx)
             except Exception as e:
                 return await self.send_text(chat_id, f"❌ 恢复失败: {e}", **ctx)
@@ -332,5 +339,10 @@ class AgentChatMixin:
 
 
 from agentmain import GeneraticAgent as _GA
-from continue_cmd import handle_frontend_command as _handle_continue_frontend, install as _install_continue, reset_conversation as _reset_conversation
+from continue_cmd import (
+    extend_agent_history as _extend_agent_history,
+    handle_frontend_command as _handle_continue_frontend,
+    install as _install_continue,
+    reset_conversation as _reset_conversation,
+)
 _install_continue(_GA)
