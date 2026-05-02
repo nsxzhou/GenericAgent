@@ -25,6 +25,32 @@ CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
 def _uin():
     return base64.b64encode(str(struct.unpack('>I', os.urandom(4))[0]).encode()).decode()
 
+def _image_size(raw):
+    try:
+        if raw.startswith(b'\x89PNG\r\n\x1a\n') and len(raw) >= 24:
+            return struct.unpack('>II', raw[16:24])
+        if raw.startswith(b'GIF87a') or raw.startswith(b'GIF89a'):
+            return struct.unpack('<HH', raw[6:10])
+        if raw.startswith(b'\xff\xd8'):
+            i = 2
+            while i + 9 < len(raw):
+                if raw[i] != 0xff:
+                    i += 1
+                    continue
+                marker = raw[i + 1]
+                i += 2
+                if marker in (0xd8, 0xd9):
+                    continue
+                if i + 2 > len(raw):
+                    break
+                seg_len = struct.unpack('>H', raw[i:i + 2])[0]
+                if marker in (0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf):
+                    return struct.unpack('>HH', raw[i + 3:i + 7])[::-1]
+                i += seg_len
+    except Exception:
+        pass
+    return 0, 0
+
 class WxBotClient:
     def __init__(self, token=None, token_file=None):
         self._tf = Path(token_file) if token_file else TOKEN_FILE
@@ -144,15 +170,19 @@ class WxBotClient:
         ciphertext_size = ((len(raw) // 16) + 1) * 16
         thumb_raw = b''; thumb_w = thumb_h = 0; thumb_ciphertext_size = 0
         if item_key == 'image_item':
-            from io import BytesIO
-            from PIL import Image
-            im = Image.open(fp); im.thumbnail((240, 240))
-            thumb_w, thumb_h = im.size
-            if im.mode not in ('RGB', 'L'):
-                im = im.convert('RGB')
-            bio = BytesIO(); im.save(bio, format='JPEG', quality=85)
-            thumb_raw = bio.getvalue()
-            thumb_ciphertext_size = ((len(thumb_raw) // 16) + 1) * 16
+            thumb_w, thumb_h = _image_size(raw)
+            try:
+                from io import BytesIO
+                from PIL import Image
+                im = Image.open(fp); im.thumbnail((240, 240))
+                thumb_w, thumb_h = im.size
+                if im.mode not in ('RGB', 'L'):
+                    im = im.convert('RGB')
+                bio = BytesIO(); im.save(bio, format='JPEG', quality=85)
+                thumb_raw = bio.getvalue()
+                thumb_ciphertext_size = ((len(thumb_raw) // 16) + 1) * 16
+            except ImportError as e:
+                print(f'[WX] PIL unavailable, reusing original image as thumbnail: {e}', file=sys.__stdout__)
         body = {
             'filekey': filekey, 'media_type': media_type, 'to_user_id': to_user_id,
             'rawsize': len(raw), 'rawfilemd5': hashlib.md5(raw).hexdigest(),
@@ -174,7 +204,7 @@ class WxBotClient:
         elif item_key == 'image_item':
             thumb_param = resp.get('thumb_upload_param', '')
             thumb_url = resp.get('thumb_upload_full_url', '')
-            if thumb_param or thumb_url:
+            if thumb_raw and (thumb_param or thumb_url):
                 thumb_media = self._upload(filekey, thumb_param, thumb_raw, aes_key=aes_key, upload_url=thumb_url)
                 thumb_size = thumb_ciphertext_size
             else:

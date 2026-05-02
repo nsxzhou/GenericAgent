@@ -32,7 +32,7 @@ ensure_wechat_deps() {
     "${py_bin}" - <<'PY' >/dev/null 2>&1
 import importlib.util
 missing = [
-    name for name in ("requests", "qrcode", "Crypto")
+    name for name in ("requests", "qrcode", "Crypto", "PIL")
     if importlib.util.find_spec(name) is None
 ]
 raise SystemExit(0 if not missing else 1)
