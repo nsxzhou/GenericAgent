@@ -362,6 +362,40 @@ def on_message(bot, msg):
         try: bot.send_typing(uid)
         except: pass
         result = ''; sent = 0; mi = 0; last_send = 0
+
+        def _strip_file_markers(t):
+            return re.sub(r'\[FILE:[^\]]+\]', '', t or '')
+
+        def _visible_text(t):
+            return _clean(_strip_file_markers(t))
+
+        def _resolve_file_path(fpath):
+            if os.path.isabs(fpath):
+                return fpath
+            resolved = os.path.join(_TEMP_DIR, fpath)
+            return resolved if os.path.exists(resolved) else fpath
+
+        def _iter_files(raw_text):
+            bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
+            seen = set()
+            for f in re.findall(r'\[FILE:([^\]]+)\]', raw_text or ''):
+                f = f.strip()
+                if not f or f.lower() in bad or f in seen:
+                    continue
+                seen.add(f)
+                yield f
+
+        def _send_media_file(fpath):
+            if not os.path.exists(fpath):
+                raise FileNotFoundError(f"文件不存在: {fpath}")
+            ext = os.path.splitext(fpath)[1].lower()
+            if ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}:
+                bot.send_image(uid, fpath, context_token=ctx)
+            elif ext in {'.mp4', '.mov', '.m4v', '.webm'}:
+                bot.send_video(uid, fpath, context_token=ctx)
+            else:
+                bot.send_file(uid, fpath, context_token=ctx)
+
         def _wx_send(text):
             s = text.strip(); t0 = time.time()
             try:
@@ -385,27 +419,32 @@ def on_message(bot, msg):
                 raw = item.get('next', '')
                 done, partial = _turn_parts(raw)
                 if len(done) > sent:
-                    merged = _clean('\n\n'.join(done[sent:]))
+                    merged = _visible_text('\n\n'.join(done[sent:]))
                     print(f'[WX] turns={len(done)}/{len(done)+1} sent={sent} sending={len(done)-sent}', file=sys.__stdout__)
                     if _send(merged):
                         sent = len(done)
         except queue.Empty: result = '[超时]'
         done, partial = _turn_parts(result)
-        rest = '\n\n'.join(done[sent:] + [partial] + ['\n\n[任务已完成]'])
-        if rest.strip(): _wx_send((_clean(rest))[-2000:])
-        files = re.findall(r'\[FILE:([^\]]+)\]', result)
-        bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
-        files = [f for f in files if f.strip().lower() not in bad and (f if os.path.isabs(f) else os.path.join(_TEMP_DIR, f)) not in media_paths]
-        for fpath in set(files):
-            if not os.path.isabs(fpath): fpath = os.path.join(_TEMP_DIR, fpath)
+        rest = '\n\n'.join(done[sent:] + ([partial] if partial else []) + ['\n\n[任务已完成]'])
+        visible_rest = _visible_text(rest)
+        if visible_rest.strip():
+            _wx_send(visible_rest[-2000:])
+        files = []
+        for f in _iter_files(result):
+            resolved = _resolve_file_path(f)
+            if resolved in media_paths:
+                continue
+            files.append(resolved)
+        for fpath in files:
             try:
-                if not os.path.exists(fpath): raise FileNotFoundError(f"文件不存在: {fpath}")
-                ext = os.path.splitext(fpath)[1].lower()
-                sender = bot.send_video if ext in {'.mp4', '.mov', '.m4v', '.webm'} else \
-                         bot.send_image if ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'} else bot.send_file
-                sender(uid, fpath, context_token=ctx)
+                _send_media_file(fpath)
                 print(f'[WX] sent media: {fpath}', file=sys.__stdout__)
-            except Exception as e: print(f'[WX] send media err: {e}', file=sys.__stdout__)
+            except Exception as e:
+                print(f'[WX] send media err: {e}', file=sys.__stdout__)
+                try:
+                    bot.send_text(uid, f'📎 {os.path.basename(fpath)}（发送失败: {e}）', context_token=ctx)
+                except Exception as send_err:
+                    print(f'[WX] send media fallback err: {send_err}', file=sys.__stdout__)
 
     threading.Thread(target=_handle, daemon=True).start()
 
