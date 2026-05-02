@@ -395,7 +395,12 @@ if __name__ == '__main__':
                 while True:
                     item = dq.get()
                     if 'next' in item: print(item['next'], end='', flush=True)
-                    if 'done' in item: print(); break
+                    if 'done' in item:
+                        if item.get('source') == 'system':
+                            print(item['done'])
+                        else:
+                            print()
+                        break
             except KeyboardInterrupt:
                 agent.abort()
                 print('\n[Interrupted]')
