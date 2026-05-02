@@ -69,5 +69,21 @@
     "name": "start_long_term_update",
     "description": "准备开始提炼记忆。发现值得长期记忆的信息（环境事实/用户偏好/避坑经验）时调用此工具。已记忆更新或在自主流程内时无需调用。超15轮完成的任务必须调用以沉淀经验",
     "parameters": {"type": "object", "properties": {}}}
-  }
+  },
+  {"type": "function", "function": {
+    "name": "image_generate",
+    "description": "通过当前 OpenAI-compatible 后端生成图片，并保存到任务临时目录",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "图片提示词"},
+      "model": {"type": "string", "description": "可选的图片模型覆盖"},
+      "size": {"type": "string", "description": "可选尺寸，例如 1024x1024"},
+      "n": {"type": "integer", "description": "生成图片数量", "default": 1},
+      "quality": {"type": "string", "description": "可选质量提示"},
+      "style": {"type": "string", "description": "可选风格提示"},
+      "background": {"type": "string", "description": "可选背景提示"},
+      "response_format": {"type": "string", "description": "可选返回格式，默认 b64_json"},
+      "output_format": {"type": "string", "description": "可选保存文件格式覆盖"},
+      "user": {"type": "string", "description": "可选最终用户标识"},
+      "extra": {"type": "object", "description": "可选的额外 provider 字段"}}}
+  }}
 ]

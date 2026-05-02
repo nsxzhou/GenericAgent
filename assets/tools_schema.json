@@ -69,5 +69,21 @@
     "name": "start_long_term_update",
     "description": "Start distilling long-term memory. Call when discovering info worth remembering (env facts/user prefs/lessons learned). Skip if memory already updated or in autonomous flow. Must call when a task that took 15+ turns is completed",
     "parameters": {"type": "object", "properties": {}}}
-  }
+  },
+  {"type": "function", "function": {
+    "name": "image_generate",
+    "description": "Generate an image through the current OpenAI-compatible backend and save it to the task temp directory",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "Image prompt"},
+      "model": {"type": "string", "description": "Optional image model override"},
+      "size": {"type": "string", "description": "Optional size, e.g. 1024x1024"},
+      "n": {"type": "integer", "description": "Number of images", "default": 1},
+      "quality": {"type": "string", "description": "Optional quality hint"},
+      "style": {"type": "string", "description": "Optional style hint"},
+      "background": {"type": "string", "description": "Optional background hint"},
+      "response_format": {"type": "string", "description": "Optional response format, defaults to b64_json"},
+      "output_format": {"type": "string", "description": "Optional saved file format override"},
+      "user": {"type": "string", "description": "Optional end-user identifier"},
+      "extra": {"type": "object", "description": "Optional extra provider fields"}}}
+  }}
 ]

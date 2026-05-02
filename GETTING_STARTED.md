@@ -103,6 +103,27 @@ native_claude_config = {
 
 > 💡 还支持 `native_oai_config`（OpenAI 标准工具调用）、`sider_cookie`（Sider）等，详见 `mykey_template.py` 中的注释。
 
+如果你要单独接入生图，把下面这类配置单独放到 `mykey.py`：
+
+```python
+image_generation_configs = [
+    {
+        'name': 'image-gen-a',
+        'apikey': 'sk-你的生图key1',
+        'apibase': 'https://你的生图服务1/v1',
+        'model': '你的生图模型1',
+    },
+    {
+        'name': 'image-gen-b',
+        'apikey': 'sk-你的生图key2',
+        'apibase': 'https://你的生图服务2/v1',
+        'model': '你的生图模型2',
+    },
+]
+```
+
+`image_generate` 工具会按顺序尝试这些配置；你也可以传 `config_name` 或 `config_index` 指定某一个。
+
 ### 关键规则
 
 **变量命名决定接口格式**（不是模型名决定的）：

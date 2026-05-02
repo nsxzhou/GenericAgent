@@ -341,6 +341,33 @@ native_oai_config = {
 #     # 'proxy': 'http://127.0.0.1:2082',              # 可选单 session HTTP 代理
 #     # 'context_win': 16000,                          # int 默认 24000；历史裁剪阈值
 # }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  2b. image_generation_config — 独立生图配置
+# ══════════════════════════════════════════════════════════════════════════════
+#  专门给 image_generate 工具使用，不影响聊天会话。
+#  只要是 OpenAI-compatible 的图像生成服务即可，路径会自动按
+#  /v1/images/generation -> /v1/images/generations 依次尝试。
+
+# image_generation_configs = [
+#     {
+#         'name': 'image-gen-a',
+#         'apikey': 'sk-<your-image-key-a>',
+#         'apibase': 'https://api.openai.com/v1',
+#         'model': 'gpt-image-1',
+#     },
+#     {
+#         'name': 'image-gen-b',
+#         'apikey': 'sk-<your-image-key-b>',
+#         'apibase': 'https://another-host/v1',
+#         'model': 'gpt-5-3',
+#     },
+# ]
+#
+# # 兼容旧写法：也可以继续写多个独立变量
+# # image_generation_config = {...}
+# # image_generation_config_2 = {...}
 #
 # # 多配几个也行，变量名含 'oai' 即可
 # # oai_config2 = {
