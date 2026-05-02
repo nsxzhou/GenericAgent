@@ -335,7 +335,7 @@ python launch.pyw
 无需额外配置，扫码登录即可：
 
 ```bash
-pip install pycryptodome qrcode requests
+pip install -e ".[wechat]"
 python frontends/wechatapp.py
 ```
 
