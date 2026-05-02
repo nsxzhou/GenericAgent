@@ -341,6 +341,33 @@ python frontends/wechatapp.py
 
 > 首次启动会弹出二维码，用微信扫码完成绑定。之后通过微信消息与 Agent 交互。
 
+### macOS 开机自启（推荐）
+
+如果你希望电脑登录后自动启动微信前端，并在异常退出时自动拉起：
+
+```bash
+bash assets/install-wechat-launchagent.sh
+```
+
+手动停止：
+
+```bash
+bash assets/stop-wechat-launchagent.sh
+```
+
+卸载自启：
+
+```bash
+bash assets/uninstall-wechat-launchagent.sh
+```
+
+日志位置：
+
+- `~/Library/Logs/GenericAgent/wechatapp.launchd.log`
+- `~/Library/Logs/GenericAgent/wechatapp.launchd.out.log`
+- `~/Library/Logs/GenericAgent/wechatapp.launchd.err.log`
+- `temp/wechatapp.log`
+
 ### QQ Bot
 
 使用 `qq-botpy` WebSocket 长连接，**无需公网 webhook**：
