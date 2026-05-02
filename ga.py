@@ -296,7 +296,16 @@ def _resolve_image_generation_configs(mykeys):
         if key.startswith('image_generation_config') and key not in ('image_generation_config', 'image_generation_configs'):
             add_cfg(key, val)
 
-    return configs
+    indexed = []
+    for idx, (name, cfg) in enumerate(configs):
+        priority = cfg.get('priority', 0)
+        try:
+            priority = int(priority)
+        except Exception:
+            priority = 0
+        indexed.append((idx, priority, name, cfg))
+    indexed.sort(key=lambda x: (-x[1], x[0]))
+    return [(name, cfg) for _, _, name, cfg in indexed]
 
 class GenericAgentHandler(BaseHandler):
     '''Generic Agent 工具库，包含多种工具的实现。工具函数自动加上了 do_ 前缀。实际工具名没有前缀。'''

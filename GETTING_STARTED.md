@@ -109,12 +109,14 @@ native_claude_config = {
 image_generation_configs = [
     {
         'name': 'image-gen-a',
+        'priority': 100,
         'apikey': 'sk-你的生图key1',
         'apibase': 'https://你的生图服务1/v1',
         'model': '你的生图模型1',
     },
     {
         'name': 'image-gen-b',
+        'priority': 80,
         'apikey': 'sk-你的生图key2',
         'apibase': 'https://你的生图服务2/v1',
         'model': '你的生图模型2',
@@ -122,7 +124,7 @@ image_generation_configs = [
 ]
 ```
 
-`image_generate` 工具会按顺序尝试这些配置；你也可以传 `config_name` 或 `config_index` 指定某一个。
+`image_generate` 工具会先按 `priority` 从大到小尝试；同优先级时保持原始顺序。你也可以传 `config_name` 或 `config_index` 指定某一个。
 
 ### 关键规则
 

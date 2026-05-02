@@ -353,12 +353,14 @@ native_oai_config = {
 # image_generation_configs = [
 #     {
 #         'name': 'image-gen-a',
+#         'priority': 100,                          # 越大越先尝试，默认 0
 #         'apikey': 'sk-<your-image-key-a>',
 #         'apibase': 'https://api.openai.com/v1',
 #         'model': 'gpt-image-1',
 #     },
 #     {
 #         'name': 'image-gen-b',
+#         'priority': 80,
 #         'apikey': 'sk-<your-image-key-b>',
 #         'apibase': 'https://another-host/v1',
 #         'model': 'gpt-5-3',
