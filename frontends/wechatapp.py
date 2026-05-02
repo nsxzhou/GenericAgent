@@ -1,10 +1,12 @@
-import os, sys, re, threading, queue, time, socket, json, struct, base64, uuid, webbrowser, hashlib, math
+import os, sys, re, threading, queue, time, socket, json, struct, base64, uuid, webbrowser, hashlib, math, subprocess
 from pathlib import Path
 from urllib.parse import quote
 import requests, qrcode
 from Crypto.Cipher import AES
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp')
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_WECHAT_UPDATE_SCRIPT = os.path.join(_PROJECT_ROOT, 'assets', 'update-wechat-launchagent.sh')
 from agentmain import GeneraticAgent
 
 # ── WxBotClient (inline from wx_bot_client.py) ──
@@ -315,6 +317,27 @@ def on_message(bot, msg):
     if text in ('/stop', '/abort'):
         agent.abort()
         bot.send_text(uid, '已停止', context_token=ctx)
+        return
+    if text.replace(' ', '').lower() == '更新微信bot':
+        if not os.path.exists(_WECHAT_UPDATE_SCRIPT):
+            bot.send_text(uid, f'更新脚本不存在: {_WECHAT_UPDATE_SCRIPT}', context_token=ctx)
+            return
+        bot.send_text(uid, '开始更新微信 bot，完成后会再通知你。', context_token=ctx)
+        def _run_update():
+            log_file = os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'wechatapp.update.command.log')
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            env = {**os.environ, 'WECHAT_UPDATE_RESTART_DELAY': '5'}
+            with open(log_file, 'a', encoding='utf-8') as f:
+                proc = subprocess.Popen(['/bin/bash', _WECHAT_UPDATE_SCRIPT], cwd=_PROJECT_ROOT, env=env, stdout=f, stderr=subprocess.STDOUT)
+                rc = proc.wait()
+            try:
+                if rc == 0:
+                    bot.send_text(uid, '微信 bot 更新成功，5 秒后自动重启。重启后可继续发消息。', context_token=ctx)
+                else:
+                    bot.send_text(uid, f'微信 bot 更新失败或已跳过，退出码 {rc}。请查看日志: {log_file}', context_token=ctx)
+            except Exception as e:
+                print(f'[WX] update result send err: {e}', file=sys.__stdout__)
+        threading.Thread(target=_run_update, daemon=True).start()
         return
     if text == '/next':
         info = agent.switch_llm(-1, persist=True)
