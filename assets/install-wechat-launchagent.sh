@@ -9,12 +9,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LABEL="com.genericagent.wechatapp"
-START_COMMAND="wechat-launchagent-start"
-STOP_COMMAND="wechat-launchagent-stop"
-STATUS_COMMAND="wechat-launchagent-status"
+GA_COMMAND="ga"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LOG_DIR="${HOME}/Library/Logs/GenericAgent"
 WRAPPER_SCRIPT="${PROJECT_ROOT}/assets/wechat_launchd.sh"
+GA_SCRIPT="${PROJECT_ROOT}/assets/ga.sh"
 START_SCRIPT="${PROJECT_ROOT}/assets/start-wechat-launchagent.sh"
 STOP_SCRIPT="${PROJECT_ROOT}/assets/stop-wechat-launchagent.sh"
 STATUS_SCRIPT="${PROJECT_ROOT}/assets/status-wechat-launchagent.sh"
@@ -27,6 +26,11 @@ fi
 
 if [[ ! -f "${WRAPPER_SCRIPT}" ]]; then
     echo "wrapper script not found at ${WRAPPER_SCRIPT}"
+    exit 1
+fi
+
+if [[ ! -f "${GA_SCRIPT}" ]]; then
+    echo "ga script not found at ${GA_SCRIPT}"
     exit 1
 fi
 
@@ -113,9 +117,7 @@ launchctl enable "gui/${UID_VALUE}/${LABEL}" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/${UID_VALUE}" "${PLIST_PATH}"
 launchctl kickstart -k "gui/${UID_VALUE}/${LABEL}" >/dev/null 2>&1 || true
 
-install_command "${START_COMMAND}" "${START_SCRIPT}"
-install_command "${STOP_COMMAND}" "${STOP_SCRIPT}"
-install_command "${STATUS_COMMAND}" "${STATUS_SCRIPT}"
+install_command "${GA_COMMAND}" "${GA_SCRIPT}"
 
 echo "Installed and started: ${LABEL}"
 echo "Plist: ${PLIST_PATH}"

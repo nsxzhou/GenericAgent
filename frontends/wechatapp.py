@@ -287,8 +287,19 @@ def _dl_media(items):
 agent = GeneraticAgent()
 agent.verbose = False
 
-_TAG_PATS = [r'<' + t + r'>.*?</' + t + r'>' for t in ('thinking', 'tool_use')]
-_TAG_PATS.append(r'<file_content>.*?</file_content>')
+_HIDDEN_TAGS = ('thinking', 'think', 'summary', 'tool_use', 'tool_call', 'tool_result', 'file_content')
+_TAG_PATS = [r'<' + t + r'\b[^>]*>.*?</' + t + r'>' for t in _HIDDEN_TAGS]
+_TURN_MARKER_RE = re.compile(r'^\s*\*{0,2}LLM Running \(Turn \d+\) \.\.\.\*{0,2}\s*$', re.M)
+_PROCESS_LINE_RE = re.compile(
+    r'^\s*(?:'
+    r'🛠️.*|'
+    r'\[(?:Info|Action|Status|Warn|Warning)\].*|'
+    r'\[WX\].*|'
+    r'Waiting for your answer \.\.\..*'
+    r')\s*$',
+    re.M,
+)
+_WX_TEXT_LIMIT = 2000
 
 def _strip_md(t):
     """Filter markdown for WeChat rich-text rendering.
@@ -317,11 +328,11 @@ def _strip_md(t):
     return re.sub(r'\n{3,}', '\n\n', t).strip()
 
 def _clean(t):
-    t = re.sub(r'^\s*LLM Running \(Turn \d+\) \.{3}\s*$', '', t, flags=re.M)
-    t = re.sub(r'^\s*🛠️\s*[A-Za-z_][A-Za-z0-9_]*\(.*$', '', t, flags=re.M)
+    t = _TURN_MARKER_RE.sub('', t or '')
+    t = _PROCESS_LINE_RE.sub('', t)
     for p in _TAG_PATS:
-        t = re.sub(p, '', t, flags=re.DOTALL)
-    t = re.sub(r'</?summary>', '', t)
+        t = re.sub(p, '', t, flags=re.DOTALL | re.IGNORECASE)
+    t = re.sub(r'</?(?:' + '|'.join(_HIDDEN_TAGS) + r')\b[^>]*>', '', t, flags=re.IGNORECASE)
     return re.sub(r'\n{3,}', '\n\n', _strip_md(t)).strip() or '...'
 
 def _turn_parts(t):
@@ -332,6 +343,51 @@ def _turn_parts(t):
     if len(parts) < 4: return [], t
     turns = [parts[i] + (parts[i+1] if i+1 < len(parts) else '') for i in range(1, len(parts), 2)]
     return (([parts[0]] if parts[0].strip() else []) + turns[:-1], turns[-1])
+
+def _strip_file_markers(t):
+    return re.sub(r'\[FILE:[^\]]+\]', '', t or '')
+
+def _iter_files(raw_text):
+    bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
+    seen = set()
+    for f in re.findall(r'\[FILE:([^\]]+)\]', raw_text or ''):
+        f = f.strip()
+        if not f or f.lower() in bad or f in seen:
+            continue
+        seen.add(f)
+        yield f
+
+def _split_wx_text(text, limit=_WX_TEXT_LIMIT):
+    text = (text or '').strip()
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind('\n', 0, limit)
+        if cut < limit * 0.6:
+            cut = text.rfind('。', 0, limit)
+        if cut < limit * 0.6:
+            cut = limit
+        parts.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text:
+        parts.append(text)
+    return parts
+
+def _visible_final_text(raw_text, has_files=False):
+    raw_text = raw_text or ''
+    if raw_text.strip() == '[超时]':
+        return '[超时]'
+    done, partial = _turn_parts(raw_text)
+    candidates = done + ([partial] if partial else [])
+    if not candidates:
+        candidates = [raw_text]
+    cleaned = []
+    for part in candidates:
+        text = _clean(_strip_file_markers(part))
+        if text and text != '...':
+            cleaned.append(text)
+    if cleaned:
+        return cleaned[-1]
+    return '已生成附件' if has_files else '任务已完成，但没有可展示的文本结果。'
 
 def on_message(bot, msg):
     text = bot.extract_text(msg).strip()
@@ -391,29 +447,13 @@ def on_message(bot, msg):
         dq = agent.put_task(prompt, source="wechat")
         try: bot.send_typing(uid)
         except: pass
-        result = ''; sent = 0; mi = 0; last_send = 0
-
-        def _strip_file_markers(t):
-            return re.sub(r'\[FILE:[^\]]+\]', '', t or '')
-
-        def _visible_text(t):
-            return _clean(_strip_file_markers(t))
+        result = ''
 
         def _resolve_file_path(fpath):
             if os.path.isabs(fpath):
                 return fpath
             resolved = os.path.join(_TEMP_DIR, fpath)
             return resolved if os.path.exists(resolved) else fpath
-
-        def _iter_files(raw_text):
-            bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
-            seen = set()
-            for f in re.findall(r'\[FILE:([^\]]+)\]', raw_text or ''):
-                f = f.strip()
-                if not f or f.lower() in bad or f in seen:
-                    continue
-                seen.add(f)
-                yield f
 
         def _send_media_file(fpath):
             if not os.path.exists(fpath):
@@ -435,36 +475,29 @@ def on_message(bot, msg):
             except Exception as e:
                 print(f'[WX] send err len={len(s)} dt={time.time()-t0:.1f}s {type(e).__name__}: {e}', file=sys.__stdout__)
                 return False
-        def _send(show):
-            nonlocal mi, last_send
-            now = time.time()
-            if mi >= 9 or not show.strip(): return False
-            if mi and now - last_send < 6 * mi: return None
-            if _wx_send(show[:2000]): mi += 1; last_send = time.time(); return True
-            return False
+
+        def _wx_send_parts(text):
+            ok = True
+            for part in _split_wx_text(text):
+                ok = _wx_send(part) and ok
+            return ok
+
         try:
             while True:
                 item = dq.get(timeout=300)
                 if 'done' in item: result = item['done']; break
-                raw = item.get('next', '')
-                done, partial = _turn_parts(raw)
-                if len(done) > sent:
-                    merged = _visible_text('\n\n'.join(done[sent:]))
-                    print(f'[WX] turns={len(done)}/{len(done)+1} sent={sent} sending={len(done)-sent}', file=sys.__stdout__)
-                    if _send(merged):
-                        sent = len(done)
+                if item.get('next'):
+                    print(f"[WX] buffered next len={len(item.get('next', ''))}", file=sys.__stdout__)
         except queue.Empty: result = '[超时]'
-        done, partial = _turn_parts(result)
-        rest = '\n\n'.join(done[sent:] + ([partial] if partial else []) + ['\n\n[任务已完成]'])
-        visible_rest = _visible_text(rest)
-        if visible_rest.strip():
-            _wx_send(visible_rest[-2000:])
         files = []
         for f in _iter_files(result):
             resolved = _resolve_file_path(f)
             if resolved in media_paths:
                 continue
             files.append(resolved)
+        visible_rest = _visible_final_text(result, has_files=bool(files))
+        if visible_rest.strip():
+            _wx_send_parts(visible_rest)
         for fpath in files:
             try:
                 _send_media_file(fpath)

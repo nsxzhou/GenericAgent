@@ -7,17 +7,21 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 LABEL="com.genericagent.wechatapp"
+GA_COMMAND="ga"
 START_COMMAND="wechat-launchagent-start"
 STOP_COMMAND="wechat-launchagent-stop"
 STATUS_COMMAND="wechat-launchagent-status"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 COMMAND_LINKS=(
+    "/opt/homebrew/bin/${GA_COMMAND}"
     "/opt/homebrew/bin/${START_COMMAND}"
     "/opt/homebrew/bin/${STOP_COMMAND}"
     "/opt/homebrew/bin/${STATUS_COMMAND}"
+    "/usr/local/bin/${GA_COMMAND}"
     "/usr/local/bin/${START_COMMAND}"
     "/usr/local/bin/${STOP_COMMAND}"
     "/usr/local/bin/${STATUS_COMMAND}"
+    "${HOME}/.local/bin/${GA_COMMAND}"
     "${HOME}/.local/bin/${START_COMMAND}"
     "${HOME}/.local/bin/${STOP_COMMAND}"
     "${HOME}/.local/bin/${STATUS_COMMAND}"

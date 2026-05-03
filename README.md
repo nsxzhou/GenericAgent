@@ -364,9 +364,9 @@ bash assets/status-wechat-launchagent.sh
 安装后也可以直接用快捷命令：
 
 ```bash
-wechat-launchagent-start
-wechat-launchagent-stop
-wechat-launchagent-status
+ga start
+ga stop
+ga status
 ```
 
 卸载自启：
