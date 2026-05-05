@@ -91,6 +91,7 @@ class WxBotClient:
         if url:
             img = self._tf.parent / 'wx_qr.png'
             qrcode.make(url).save(str(img)); webbrowser.open(str(img))
+            qr = qrcode.QRCode(border=1); qr.add_data(url); qr.make(fit=True); qr.print_ascii(invert=True)
         last = ''
         while True:
             time.sleep(poll_interval)
@@ -443,7 +444,7 @@ def on_message(bot, msg):
         return
 
     def _handle():
-        prompt = f"If you need to show files to user, use [FILE:filepath] in your response.\n\n{text}"
+        prompt = text if text.startswith('/') else f"If you need to show files to user, use [FILE:filepath] in your response.\n\n{text}"
         dq = agent.put_task(prompt, source="wechat")
         try: bot.send_typing(uid)
         except: pass
