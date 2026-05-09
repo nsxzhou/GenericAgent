@@ -6,7 +6,7 @@ if sys.stderr is None: sys.stderr = open(os.devnull, "w")
 elif hasattr(sys.stderr, 'reconfigure'): sys.stderr.reconfigure(errors='replace')
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from llmcore import reload_mykeys, LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession
+from llmcore import reload_mykeys, LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession, resolve_client
 from agent_loop import agent_runner_loop
 from ga import GenericAgentHandler, smart_format, get_global_memory, format_error, consume_file
 
@@ -53,7 +53,7 @@ def get_system_prompt():
     prompt += get_global_memory()
     return prompt
 
-class GeneraticAgent:
+class GenericAgent:
     def __init__(self):
         os.makedirs(os.path.join(script_dir, 'temp'), exist_ok=True)
         self.lock = threading.Lock()
@@ -66,6 +66,7 @@ class GeneraticAgent:
         self.handler = None; self.verbose = True
         self._llm_default = _load_llm_default()
         self.peer_hint = True
+        self.log_path = os.path.join(script_dir, f'temp/model_responses/model_responses_{int(time.time()*1e6)%1000000:06d}.txt')
         self.load_llm_sessions()
 
     def _bind_shared_history(self):
@@ -145,11 +146,8 @@ class GeneraticAgent:
         for k, cfg in mykeys.items():
             if not any(x in k for x in ['api', 'config', 'cookie']): continue
             try:
-                if 'native' in k and 'claude' in k: llm_sessions += [NativeToolClient(NativeClaudeSession(cfg=cfg))]
-                elif 'native' in k and 'oai' in k: llm_sessions += [NativeToolClient(NativeOAISession(cfg=cfg))]
-                elif 'claude' in k: llm_sessions += [ToolClient(ClaudeSession(cfg=cfg))]
-                elif 'oai' in k: llm_sessions += [ToolClient(LLMSession(cfg=cfg))]
-                elif 'mixin' in k: llm_sessions += [{'mixin_cfg': cfg}]
+                if 'mixin' in k: llm_sessions += [{'mixin_cfg': cfg}]
+                elif c := resolve_client(k): llm_sessions += [c]
             except: pass
         for i, s in enumerate(llm_sessions):
             if isinstance(s, dict) and 'mixin_cfg' in s:
@@ -279,6 +277,8 @@ class GeneraticAgent:
                 if ps > 0: handler.working['key_info'] += f'\n[SYSTEM] 此为 {ps} 个对话前设置的key_info，若已在新任务，先更新或清除工作记忆。\n'
             self.handler = handler
             # although new handler, the **full** history is in llmclient, so it is full history!
+            if self.llmclient is not None:
+                self.llmclient.log_path = self.log_path
             gen = agent_runner_loop(self, self.get_current_system_prompt, raw_query,
                                 handler, self.get_tools_schema, max_turns=70, verbose=self.verbose)
             try:
@@ -303,7 +303,9 @@ class GeneraticAgent:
                 self.is_running = self.stop_sig = False
                 self.task_queue.task_done()
                 if self.handler is not None: self.handler.code_stop_signal.append(1)
-    
+
+GeneraticAgent = GenericAgent
+
 if __name__ == '__main__':
     import argparse
     from datetime import datetime
@@ -340,6 +342,7 @@ if __name__ == '__main__':
             os.makedirs(d, exist_ok=True)
             import glob; [os.remove(f) for f in glob.glob(os.path.join(d, 'output*.txt'))]
             with open(infile, 'w', encoding='utf-8') as f: f.write(args.input)
+        if (fh := consume_file(d, '_history.json')): agent.llmclient.backend.history = json.loads(fh)
         with open(infile, encoding='utf-8') as f: raw = f.read()
         while True:
             dq = agent.put_task(raw, source='task')
@@ -368,6 +371,7 @@ if __name__ == '__main__':
             try: task = mod.check()
             except Exception as e: 
                 print(f'[Reflect] check() error: {e}'); continue
+            if task and task == '/exit': break
             if task is None: continue
             print(f'[Reflect] triggered: {task[:80]}')
             dq = agent.put_task(task, source='reflect')

@@ -21,6 +21,7 @@ dependencies = [
 ui = [
     "streamlit>=1.28",
     "pywebview>=4.0",
+    "textual>=0.70",
 ]
 wechat = [
     "pycryptodome>=3.19",
