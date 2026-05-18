@@ -462,6 +462,8 @@ def on_message(bot, msg):
                 _typing_stop.wait(2.0)
         threading.Thread(target=_keep_typing, daemon=True).start()
         result = ''
+        sent = 0
+        item = {}
 
         def _resolve_file_path(fpath):
             if os.path.isabs(fpath):
@@ -496,23 +498,47 @@ def on_message(bot, msg):
                 ok = _wx_send(part) and ok
             return ok
 
+        def _send(show):
+            nonlocal mi, last_send
+            now = time.time()
+            if mi >= 9 or not show.strip(): return False
+            if mi and now - last_send < 6 * mi: return None
+            if _wx_send_parts(show):
+                mi += 1; last_send = time.time(); return True
+            return False
+
+        mi = 0
+        last_send = 0
         try:
+            done = []; turn = 1
             while True:
                 item = dq.get(timeout=300)
-                if 'done' in item: result = item['done']; break
-                if item.get('next'):
-                    print(f"[WX] buffered next len={len(item.get('next', ''))}", file=sys.__stdout__)
+                if 'done' in item: break
+                if item.get('turn', turn) > turn:
+                    outputs = item.get('outputs', [])
+                    lastdone = outputs[-2] if len(outputs) >= 2 else ''
+                    turn = item['turn']; done.append(lastdone)
+                if len(done) > sent:
+                    merged = _clean('\n\n'.join(done[sent:]))
+                    print(f'[WX] turns={len(done)}/{len(done)+1} sent={sent} sending={len(done)-sent}', file=sys.__stdout__)
+                    if _send(merged): sent = len(done)
         except queue.Empty: result = '[超时]'
         _typing_stop.set()
+
+        if 'done' in item: result, done = item['done'], item.get('outputs', [])
+        rest = _clean('\n\n'.join(done[sent:] + ['\n\n[任务已完成]']).strip())
+        if rest: _wx_send_parts(rest)
+
         files = []
         for f in _iter_files(result):
             resolved = _resolve_file_path(f)
             if resolved in media_paths:
                 continue
             files.append(resolved)
-        visible_rest = _visible_final_text(result, has_files=bool(files))
-        if visible_rest.strip():
-            _wx_send_parts(visible_rest)
+        if not rest and result:
+            visible_rest = _visible_final_text(result, has_files=bool(files))
+            if visible_rest.strip():
+                _wx_send_parts(visible_rest)
         for fpath in files:
             try:
                 _send_media_file(fpath)

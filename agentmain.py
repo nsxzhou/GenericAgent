@@ -65,6 +65,7 @@ class GenericAgent:
         self.llm_no = None;  self.inc_out = False
         self.handler = None; self.verbose = True
         self._llm_default = _load_llm_default()
+        self.show_mode = 'text'
         self.peer_hint = True
         self.log_path = os.path.join(script_dir, f'temp/model_responses/model_responses_{int(time.time()*1e6)%1000000:06d}.txt')
         self.load_llm_sessions()
@@ -280,24 +281,29 @@ class GenericAgent:
             if self.llmclient is not None:
                 self.llmclient.log_path = self.log_path
             gen = agent_runner_loop(self, self.get_current_system_prompt, raw_query,
-                                handler, self.get_tools_schema, max_turns=70, verbose=self.verbose)
+                                handler, self.get_tools_schema, max_turns=80, verbose=self.verbose,
+                                yield_info=True)
             try:
-                full_resp = ""; last_pos = 0
+                full_resp = ""; last_pos = 0; curr_turn = 0; turn_resps = []
                 for chunk in gen:
                     if consume_file(self.task_dir, '_stop'): self.abort() 
                     if self.stop_sig: break
-                    full_resp += chunk
-                    if len(full_resp) - last_pos > 50 or 'LLM Running' in chunk:
-                        display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp, 'source': source})
+                    if isinstance(chunk, dict) and 'turn' in chunk:
+                        curr_turn = chunk['turn']; turn_resps.append(''); continue
+                    full_resp += chunk;  turn_resps[-1] += chunk
+                    if len(full_resp) - last_pos > 30 or 'LLM Running' in chunk:
+                        display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp,
+                                           'source': source, 'turn': curr_turn, 'outputs': turn_resps[-2:]})
                         last_pos = len(full_resp)
-                if self.inc_out and last_pos < len(full_resp): display_queue.put({'next': full_resp[last_pos:], 'source': source})
-                if '</summary>' in full_resp: full_resp = full_resp.replace('</summary>', '</summary>\n\n')
-                if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)                
-                display_queue.put({'done': full_resp, 'source': source})
+                if self.inc_out and last_pos < len(full_resp): display_queue.put({'next': full_resp[last_pos:], 'source': source,
+                                                                                  'turn': curr_turn, 'outputs': turn_resps[-2:]})
+                #if '</summary>' in full_resp: full_resp = full_resp.replace('</summary>', '</summary>\n\n')
+                #if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)
+                display_queue.put({'done': full_resp, 'source': source, 'turn': curr_turn, 'outputs': turn_resps.copy()})
                 self.history = handler.history_info
             except Exception as e:
                 print(f"Backend Error: {format_error(e)}")
-                display_queue.put({'done': full_resp + f'\n```\n{format_error(e)}\n```', 'source': source})
+                display_queue.put({'done': full_resp + f'\n```\n{format_error(e)}\n```', 'source': source, 'turn': curr_turn, 'outputs': turn_resps.copy()})
             finally:
                 if self.stop_sig: print('User aborted the task.')
                 self.is_running = self.stop_sig = False
@@ -316,7 +322,8 @@ if __name__ == '__main__':
     parser.add_argument('--llm_no', type=int, default=None)
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--bg', action='store_true', help='popen, print PID, exit')
-    args = parser.parse_args()
+    args, _unknown = parser.parse_known_args()
+    _reflect_args = dict(zip([k.lstrip('-') for k in _unknown[::2]], _unknown[1::2])) if _unknown else {}
 
     if args.bg:
         import subprocess, platform
@@ -361,11 +368,15 @@ if __name__ == '__main__':
         import importlib.util
         spec = importlib.util.spec_from_file_location('reflect_script', args.reflect)
         mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        if hasattr(mod, 'init'): mod.init(_reflect_args)
         _mt = os.path.getmtime(args.reflect)
-        print(f'[Reflect] loaded {args.reflect}')
+        print(f'[Reflect] loaded {args.reflect}' + (f' args={_reflect_args}' if _reflect_args else ''))
         while True:
             if os.path.getmtime(args.reflect) != _mt:
-                try: spec.loader.exec_module(mod); _mt = os.path.getmtime(args.reflect); print('[Reflect] reloaded')
+                try:
+                    spec.loader.exec_module(mod); _mt = os.path.getmtime(args.reflect)
+                    if hasattr(mod, 'init'): mod.init(_reflect_args)
+                    print('[Reflect] reloaded')
                 except Exception as e: print(f'[Reflect] reload error: {e}')
             time.sleep(getattr(mod, 'INTERVAL', 5))
             try: task = mod.check()
@@ -393,6 +404,14 @@ if __name__ == '__main__':
         try: import readline
         except Exception: pass
         agent.inc_out = True
+        if sys.stdout.isatty():
+            try: model = agent.get_llm_name(model=True) or '?'
+            except Exception: model = '?'
+            try:
+                sys.stdout.write(f'\x1b[92m✦\x1b[0m \x1b[1mGenericAgent\x1b[0m '
+                                 f'\x1b[90m· cli · model:\x1b[0m {model}\n')
+                sys.stdout.flush()
+            except Exception: pass
         while True:
             q = input('> ').strip()
             if not q: continue
