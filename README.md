@@ -373,7 +373,7 @@ You're also welcome to join the **GenericAgent Community Group** for discussion,
 <div align="center">
   <table>
     <tr>
-      <td align="center"><strong>WeChat Group 18</strong><br/><img src="assets/images/wechat_group18.jpg" alt="WeChat Group 18 QR" width="240"/></td>
+      <td align="center"><strong>WeChat Group 19</strong><br/><img src="assets/images/wechat_group19.jpg" alt="WeChat Group 19 QR" width="240"/></td>
     </tr>
   </table>
 </div>
@@ -861,7 +861,7 @@ GenericAgent 通过 **分层记忆 × 最小工具集 × 自主执行循环** �
 <div align="center">
   <table>
     <tr>
-      <td align="center"><strong>微信群 18</strong><br/><img src="assets/images/wechat_group18.jpg" alt="微信群 18 二维码" width="240"/></td>
+      <td align="center"><strong>微信群 19</strong><br/><img src="assets/images/wechat_group19.jpg" alt="微信群 19 二维码" width="240"/></td>
     </tr>
   </table>
 </div>
