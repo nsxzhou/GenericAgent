@@ -9,6 +9,14 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WECHAT_UPDATE_SCRIPT = os.path.join(_PROJECT_ROOT, 'assets', 'update-wechat-launchagent.sh')
 from agentmain import GeneraticAgent
 
+# ── AuthExpired (errcode -14 from getUpdates) ──
+class AuthExpired(Exception):
+    """Bot token expired or invalid (errcode=-14)."""
+    pass
+
+# ── Per-user abort flags (shared between on_message invocations) ──
+_task_aborted: dict = {}  # uid -> True  (set by /stop, read by _handle)
+
 # ── WxBotClient (inline from wx_bot_client.py) ──
 for _k in ('HTTPS_PROXY', 'https_proxy'):
     os.environ.pop(_k, None)  # avoid inherited proxy breaking WeChat long-poll SSL
@@ -90,7 +98,7 @@ class WxBotClient:
         print(f'[QR登录] ID: {qr_id}')
         if url:
             img = self._tf.parent / 'wx_qr.png'
-            qrcode.make(url).save(str(img)); webbrowser.open(str(img))
+            qrcode.make(url).save(str(img))  # 保存到文件，不弹浏览器
             qr = qrcode.QRCode(border=1); qr.add_data(url); qr.make(fit=True); qr.print_ascii(invert=True)
         last = ''
         while True:
@@ -116,7 +124,10 @@ class WxBotClient:
             return []
         if resp.get('errcode'):
             print(f'[getUpdates] err: {resp.get("errcode")} {resp.get("errmsg","")}')
-            if resp['errcode'] == -14: self._buf = ''; self._save()
+            if resp['errcode'] == -14:
+                self._buf = ''; self.token = ''; self.bot_id = ''
+                self._save(bot_token='', ilink_bot_id='')
+                raise AuthExpired(resp.get('errmsg',''))
             return []
         nb = resp.get('get_updates_buf', '')
         if nb: self._buf = nb; self._save()
@@ -261,6 +272,7 @@ class WxBotClient:
                     try: on_message(self, msg)
                     except Exception as e: print(f'[Bot] 回调异常: {e}')
             except KeyboardInterrupt: print('[Bot] 退出'); break
+            except AuthExpired: raise
             except Exception as e: print(f'[Bot] 异常: {e}，5s重试'); time.sleep(5)
 
 # ── Unified media download (IMAGE/VIDEO/FILE/VOICE) ──
@@ -408,6 +420,8 @@ def on_message(bot, msg):
     # Commands
     if text in ('/stop', '/abort'):
         agent.abort()
+        _task_aborted[uid] = True
+        print(f'[WX] /stop set _task_aborted[{uid}]', file=sys.__stdout__)
         bot.send_text(uid, '已停止', context_token=ctx)
         return
     if text.replace(' ', '').lower() == '更新微信bot':
@@ -526,7 +540,9 @@ def on_message(bot, msg):
         _typing_stop.set()
 
         if 'done' in item: result, done = item['done'], item.get('outputs', [])
-        rest = _clean('\n\n'.join(done[sent:] + ['\n\n[任务已完成]']).strip())
+        aborted = _task_aborted.pop(uid, False)
+        tag = '[已停止]' if aborted else '[任务已完成]'
+        rest = _clean('\n\n'.join(done[sent:] + ['\n\n' + tag]).strip())
         if rest: _wx_send_parts(rest)
 
         files = []
@@ -553,16 +569,23 @@ def on_message(bot, msg):
     threading.Thread(target=_handle, daemon=True).start()
 
 if __name__ == '__main__':
+    _do_relogin = '--relogin' in sys.argv
     try: _lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); _lock.bind(('127.0.0.1', 19531))
     except OSError: print('[WeChat] Another instance running, exiting.'); sys.exit(1)
     _logf = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temp', 'wechatapp.log'), 'a', encoding='utf-8', buffering=1)
     sys.stdout = sys.stderr = _logf
     print(f'[NEW] Process starting {time.strftime("%m-%d %H:%M")}')
     bot = WxBotClient()
-    if not bot.token:
+    if _do_relogin or not bot.token:
+        if not sys.stdout.isatty():
+            print('[Bot] no token and not interactive, exit.'); sys.exit(1)
         sys.stdout = sys.stderr = sys.__stdout__  # restore for QR display
         bot.login_qr()
         sys.stdout = sys.stderr = _logf
     threading.Thread(target=agent.run, daemon=True).start()
     print(f'WeChat Bot 已启动 (bot_id={bot.bot_id})', file=sys.__stdout__)
-    bot.run_loop(on_message)
+    try:
+        bot.run_loop(on_message)
+    except AuthExpired:
+        print('[Bot] token expired, exit.', file=sys.__stdout__)
+        sys.exit(2)

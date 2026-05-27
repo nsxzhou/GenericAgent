@@ -3,29 +3,34 @@ from datetime import datetime
 from urllib.parse import urlparse
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _RESP_CACHE_KEY = str(uuid.uuid4())
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in sys.path: sys.path.append(_ROOT)
 
 def _load_mykeys():
     global _mykey_path
     try:
         import mykey; importlib.reload(mykey); _mykey_path = mykey.__file__
         return {k: v for k, v in vars(mykey).items() if not k.startswith('_')}
-    except ImportError: pass
-    _mykey_path = p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mykey.json')
-    if not os.path.exists(p): raise Exception('[ERROR] mykey.py or mykey.json not found, please create one from mykey_template.')
-    with open(p, encoding='utf-8') as f: return json.load(f)
+    except ImportError as e:
+        if getattr(e, 'name', None) != 'mykey':
+            raise Exception(f'[ERROR] mykey.py found but failed to import: {e}') from e
+    except SyntaxError as e:
+        raise Exception(f'[ERROR] mykey.py has syntax error: {e}') from e
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mykey.json')
+    if not os.path.exists(p): raise Exception('[ERROR] mykey.py not found in sys.path and mykey.json not found. Run "python configure_mykey.py" or copy mykey_template.py to mykey.py and fill in your keys.')
+    with open(_mykey_path := p, encoding='utf-8') as f: return json.load(f)
 
 _mykey_path = _mykey_mtime = None
 def reload_mykeys():
     global _mykey_mtime
-    mt = os.stat(_mykey_path).st_mtime_ns if _mykey_path else -1
-    if mt == _mykey_mtime: return globals().get('mykeys', {}), False
-    mk = _load_mykeys(); _mykey_mtime = os.stat(_mykey_path).st_mtime_ns
-    print(f'[Info] Load mykeys from {_mykey_path}')
-    globals().update(mykeys=mk)
-    if mk.get('langfuse_config'):
-        try: from plugins import langfuse_tracing
-        except Exception: pass
-    return mk, True
+    try:
+        mt = os.stat(_mykey_path).st_mtime_ns if _mykey_path else -1
+        if mt == _mykey_mtime: return globals().get('mykeys', {}), False
+        mk = _load_mykeys(); _mykey_mtime = os.stat(_mykey_path).st_mtime_ns
+        print(f'[Info] Load mykeys from {_mykey_path}')
+        globals().update(mykeys=mk)
+        return mk, True
+    except: return globals().get('mykeys', {}), False
 
 def __getattr__(name):  # once guard in PEP 562
     if name == 'mykeys': return reload_mykeys()[0]
@@ -354,7 +359,7 @@ def _stamp_oai_cache_markers(messages, model):
             messages[idx] = {**messages[idx], 'content': c}
 
 def _stream_with_retry(sess, url, headers, payload, parse_fn):
-    _RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+    _RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 529}
     def _delay(resp, attempt):
         try: ra = float((resp.headers or {}).get("retry-after"))
         except: ra = None

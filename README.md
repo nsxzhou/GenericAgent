@@ -876,6 +876,7 @@ GenericAgent 通过 **分层记忆 × 最小工具集 × 自主执行循环** �
 
 - [chilishark27/ga-manager](https://github.com/chilishark27/ga-manager)
 - [wangjc683/galley](https://github.com/wangjc683/galley)
+- https://github.com/FroStorM/A3Agent/tree/workbench
 
 ---
 
