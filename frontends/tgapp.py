@@ -1,6 +1,8 @@
-import os, sys, re, threading, asyncio, queue as Q, time, random, uuid
+import os, sys, re, threading, asyncio, queue as Q, time, random, uuid, subprocess
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp')
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TELEGRAM_UPDATE_SCRIPT = os.path.join(_PROJECT_ROOT, 'assets', 'update-telegram-launchagent.sh')
 from agentmain import GeneraticAgent
 try:
     from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
@@ -37,10 +39,23 @@ from btw_cmd import handle_frontend_command as handle_btw_frontend_command
 from review_cmd import handle as handle_review_command
 from llmcore import mykeys
 
+def _telegram_allowed_users(value):
+    users = set()
+    for item in value or []:
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            users.add(item)
+            continue
+        text = str(item).strip()
+        if text.isdigit():
+            users.add(int(text))
+    return users
+
 agent = GeneraticAgent()
 agent.verbose = False
 agent.inc_out = True
-ALLOWED = set(mykeys.get('tg_allowed_users', []))
+ALLOWED = _telegram_allowed_users(mykeys.get('tg_allowed_users', []))
 
 _DRAFT_HINT = "thinking..."
 _STREAM_SUFFIX = " ⏳"
@@ -903,10 +918,32 @@ async def handle_msg(update, ctx):
     uid = update.effective_user.id
     if ALLOWED and uid not in ALLOWED:
         return await update.message.reply_text("no")
-    prompt = _build_text_prompt(update.message.text)
+    text = update.message.text or ""
+    if text.replace(' ', '').lower() == '更新纸飞机bot':
+        return await _handle_update_telegram_bot(update.message)
+    prompt = _build_text_prompt(text)
     dq = agent.put_task(prompt, source="telegram")
     task = asyncio.create_task(_stream(dq, update.message))
     ctx.user_data['stream_task'] = task
+
+async def _handle_update_telegram_bot(message):
+    if not os.path.exists(_TELEGRAM_UPDATE_SCRIPT):
+        return await message.reply_text(f'更新脚本不存在: {_TELEGRAM_UPDATE_SCRIPT}')
+    await message.reply_text('开始更新纸飞机 bot，完成后会再通知你。')
+    log_file = os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'telegramapp.update.command.log')
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+    def _run_update():
+        env = {**os.environ, 'TELEGRAM_UPDATE_RESTART_DELAY': '5'}
+        with open(log_file, 'a', encoding='utf-8') as f:
+            proc = subprocess.Popen(['/bin/bash', _TELEGRAM_UPDATE_SCRIPT], cwd=_PROJECT_ROOT, env=env, stdout=f, stderr=subprocess.STDOUT)
+            return proc.wait()
+
+    rc = await asyncio.to_thread(_run_update)
+    if rc == 0:
+        await message.reply_text('纸飞机 bot 更新成功，5 秒后自动重启。重启后可继续发消息。')
+    else:
+        await message.reply_text(f'纸飞机 bot 更新失败或已跳过，退出码 {rc}。请查看日志: {log_file}')
 
 async def handle_ask_callback(update, ctx):
     query = update.callback_query

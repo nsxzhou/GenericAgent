@@ -34,6 +34,9 @@ wechat = [
     "qrcode>=7.4",
     "pillow>=10.0",
 ]
+telegram = [
+    "python-telegram-bot>=20.0",
+]
 all-frontends = [
     "python-telegram-bot>=20.0",
     "qq-botpy>=1.0",

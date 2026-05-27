@@ -6,21 +6,25 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
-LABEL="com.genericagent.wechatapp"
-START_COMMAND="wechat-launchagent-start"
-STOP_COMMAND="wechat-launchagent-stop"
-STATUS_COMMAND="wechat-launchagent-status"
+LABEL="com.genericagent.telegramapp"
+START_COMMAND="telegram-launchagent-start"
+STOP_COMMAND="telegram-launchagent-stop"
+STATUS_COMMAND="telegram-launchagent-status"
+UPDATE_COMMAND="telegram-launchagent-update"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 COMMAND_LINKS=(
     "/opt/homebrew/bin/${START_COMMAND}"
     "/opt/homebrew/bin/${STOP_COMMAND}"
     "/opt/homebrew/bin/${STATUS_COMMAND}"
+    "/opt/homebrew/bin/${UPDATE_COMMAND}"
     "/usr/local/bin/${START_COMMAND}"
     "/usr/local/bin/${STOP_COMMAND}"
     "/usr/local/bin/${STATUS_COMMAND}"
+    "/usr/local/bin/${UPDATE_COMMAND}"
     "${HOME}/.local/bin/${START_COMMAND}"
     "${HOME}/.local/bin/${STOP_COMMAND}"
     "${HOME}/.local/bin/${STATUS_COMMAND}"
+    "${HOME}/.local/bin/${UPDATE_COMMAND}"
 )
 UID_VALUE="$(id -u)"
 

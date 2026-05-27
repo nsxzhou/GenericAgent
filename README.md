@@ -113,14 +113,14 @@ Every time GenericAgent solves a new task, it automatically crystallizes the exe
 
 > ⚠️ **Python version**: use **Python 3.11 or 3.12**. **Do not** use Python 3.14 — it is incompatible with `pywebview` and a few other GA dependencies.
 >
-> 📖 Detailed installation guide: **[installation.md](docs/installation.md)** · **[installation_zh.md（中文）](docs/installation_zh.md)**
+> 📖 Usage guide: **[docs/README.md](docs/README.md)**
 
 ### For LLM Agents
 
-Fetch the installation guide and follow it:
+Fetch the usage guide and follow it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/installation.md
+curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/README.md
 ```
 
 ### For Humans
@@ -160,7 +160,7 @@ python launch.pyw
 
 > 💡 GenericAgent is meant to grow its environment **through the Agent itself**, not by pre-installing every possible package.
 
-📖 Full guide: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
+📖 Full guide: [`docs/README.md`](docs/README.md)
 
 ---
 
@@ -483,14 +483,14 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for full text.
 
 > ⚠️ **Python 版本：** 推荐使用 **Python 3.11 或 3.12**。**请不要使用 Python 3.14**，与 `pywebview` 及部分依赖不兼容。
 >
-> 📖 详细安装指南：**[installation_zh.md（中文）](docs/installation_zh.md)** · **[installation.md (English)](docs/installation.md)**
+> 📖 使用文档：**[docs/README.md](docs/README.md)**
 
 ### 给 LLM Agent 看的
 
-获取安装指南并照做：
+获取使用文档并照做：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/installation_zh.md
+curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/README.md
 ```
 
 ### 给人类用户看的
@@ -530,7 +530,7 @@ python launch.pyw
 
 > 💡 GenericAgent 更推荐由 **Agent 在使用中自举环境**，而不是预先手动装完整依赖。
 
-📖 完整引导流程见 [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
+📖 完整引导流程见 [`docs/README.md`](docs/README.md)
 📖 新手图文版：[飞书文档](https://my.feishu.cn/wiki/CGrDw0T76iNFuskmwxdcWrpinPb)
 📘 完整入门教程（Datawhale 出品）：[Hello GenericAgent](https://datawhalechina.github.io/hello-generic-agent/) · [GitHub](https://github.com/datawhalechina/hello-generic-agent)
 
@@ -619,9 +619,9 @@ bash assets/status-wechat-launchagent.sh
 安装后也可以直接用快捷命令：
 
 ```bash
-ga start
-ga stop
-ga status
+ga wechat start
+ga wechat stop
+ga wechat status
 ```
 
 卸载自启：
@@ -636,6 +636,25 @@ bash assets/uninstall-wechat-launchagent.sh
 - `~/Library/Logs/GenericAgent/wechatapp.launchd.out.log`
 - `~/Library/Logs/GenericAgent/wechatapp.launchd.err.log`
 - `temp/wechatapp.log`
+
+### Telegram Bot 开机自启
+
+先在 `mykey.py` 配置 `tg_bot_token` 和非空 `tg_allowed_users`，然后安装 LaunchAgent：
+
+```bash
+bash assets/install-telegram-launchagent.sh
+```
+
+安装后可用快捷命令管理：
+
+```bash
+ga telegram start
+ga telegram stop
+ga telegram status
+ga telegram update
+```
+
+也可以在 Telegram 中发送 `更新纸飞机bot` 触发更新。
 
 ### QQ Bot
 
@@ -676,7 +695,7 @@ fs_allowed_users = ["ou_xxx"]  # 或 ['*']
 **出站支持**：流式进度卡片、图片回传、文件 / media 回传  
 **视觉模型**：图片首轮以真正的多模态输入发送给兼容 OpenAI Vision 的后端
 
-详细配置见 [docs/SETUP_FEISHU.md](docs/SETUP_FEISHU.md)
+更多日常使用方式见 [docs/README.md](docs/README.md)
 
 
 ### 企业微信（WeCom）
