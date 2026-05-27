@@ -37,6 +37,7 @@ except ImportError:
             agent.history.extend(lines or [])
 from btw_cmd import handle_frontend_command as handle_btw_frontend_command
 from review_cmd import handle as handle_review_command
+from telegram_tts import TelegramTTS
 from llmcore import mykeys
 
 def _telegram_allowed_users(value):
@@ -57,6 +58,23 @@ agent.verbose = False
 agent.inc_out = True
 ALLOWED = _telegram_allowed_users(mykeys.get('tg_allowed_users', []))
 
+def _mykey_str(*names):
+    for name in names:
+        value = mykeys.get(name)
+        if value:
+            return str(value).strip()
+    return ""
+
+tts = TelegramTTS(
+    _TEMP_DIR,
+    api_key=_mykey_str("mimo_api_key", "mimo_tts_api_key"),
+    api_base=_mykey_str("mimo_api_base", "mimo_tts_api_base"),
+    voice=_mykey_str("mimo_tts_voice"),
+    style=_mykey_str("mimo_tts_style"),
+    ffmpeg_bin=_mykey_str("mimo_tts_ffmpeg", "ffmpeg_bin"),
+    proxy=_mykey_str("proxy"),
+)
+
 _DRAFT_HINT = "thinking..."
 _STREAM_SUFFIX = " ⏳"
 _STREAM_SEGMENT_LIMIT = max(1200, MessageLimit.MAX_TEXT_LENGTH - 256)
@@ -75,6 +93,7 @@ _ASK_CANCEL_PROMPT = "已取消选择，请直接发送下一步操作。"
 _ASK_MULTI_HINT = "可多选：点选项目后点击 Done 提交。"
 _ASK_MULTI_EMPTY_HINT = "请至少选择一项，或选择 none of these above。"
 _LLM_MENU_PROMPT = "请选择要切换的 LLM："
+_TELEGRAM_HELP_TEXT = HELP_TEXT + "\n/tts on|off|status|test - 控制 MiMo 语音朗读"
 _ask_menu_events = Q.Queue()
 _ask_menu_store = {}
 _llm_menu_store = {}
@@ -850,10 +869,12 @@ async def _stream(dq, msg):
                     done_item = item
                     break
             if done_item is not None:
-                await stream.finalize(done_item.get("done", ""))
+                done_text = done_item.get("done", "")
+                await stream.finalize(done_text)
                 event = _drain_latest_ask_user_event()
                 if event:
                     await _send_ask_user_menu(msg, event)
+                await _send_tts_text(msg, done_text)
                 break
     except asyncio.CancelledError:
         await stream.finish_with_notice("⏹️ 已停止")
@@ -891,6 +912,90 @@ async def _reply_command_text(message, text):
         except Exception as exc:
             print(f"[TG command markdown fallback] {type(exc).__name__}: {exc}", flush=True)
             await message.reply_text(segment)
+
+def _tg_retry_after_seconds(exc):
+    retry_after = getattr(exc, "_retry_after", None)
+    if retry_after is None:
+        retry_after = getattr(exc, "retry_after", 0) or 0
+    if hasattr(retry_after, "total_seconds"):
+        retry_after = retry_after.total_seconds()
+    try:
+        return max(0.0, float(retry_after))
+    except (TypeError, ValueError):
+        return 0.0
+
+async def _reply_tts_notice(message, text):
+    try:
+        await message.reply_text(text)
+    except Exception as exc:
+        print(f"[TG TTS notice error] {type(exc).__name__}: {exc}", flush=True)
+
+async def _reply_voice_with_retry(message, voice_path, caption=None):
+    while True:
+        try:
+            with open(voice_path, "rb") as fp:
+                return await message.reply_voice(
+                    fp,
+                    caption=caption,
+                    filename=os.path.basename(voice_path),
+                    read_timeout=120,
+                    write_timeout=120,
+                )
+        except RetryAfter as exc:
+            await asyncio.sleep(_tg_retry_after_seconds(exc) + _RETRY_AFTER_MARGIN_SECONDS)
+
+async def _send_tts_text(message, raw_text, force=False):
+    if not force and not tts.should_speak(message):
+        return
+    if not tts.is_private_chat(message):
+        if force:
+            await _reply_tts_notice(message, "TTS 只在 Telegram 私聊中生效。")
+        return
+    missing = tts.missing_reason()
+    if missing:
+        await _reply_tts_notice(message, f"语音生成失败: {missing}")
+        return
+    chunks = tts.split_text_for_tts(raw_text)
+    if not chunks:
+        if force:
+            await _reply_tts_notice(message, "语音生成失败: 没有可朗读的正文")
+        return
+    total = len(chunks)
+    try:
+        for index, chunk in enumerate(chunks, start=1):
+            voice_path = await asyncio.to_thread(tts.create_voice_file, chunk)
+            try:
+                caption = f"语音 {index}/{total}" if total > 1 else None
+                await _reply_voice_with_retry(message, voice_path, caption=caption)
+            finally:
+                tts.cleanup_voice_file(voice_path)
+    except Exception as exc:
+        print(f"[TG TTS error] {type(exc).__name__}: {exc}", flush=True)
+        await _reply_tts_notice(message, f"语音生成失败: {exc}")
+
+async def cmd_tts(update, ctx):
+    message = update.message
+    parts = (message.text or "").split()
+    action = parts[1].lower() if len(parts) > 1 else "status"
+    if action in ("on", "enable", "enabled"):
+        tts.set_enabled(True)
+        missing = tts.missing_reason()
+        suffix = f"\n但当前不可用: {missing}" if missing else ""
+        return await message.reply_text(f"✅ TTS 已开启。后续私聊中的 GA 回复会附带 MiMo 语音。{suffix}")
+    if action in ("off", "disable", "disabled"):
+        tts.set_enabled(False)
+        return await message.reply_text("✅ TTS 已关闭。")
+    if action == "status":
+        return await _reply_command_text(message, tts.status_text())
+    if action == "test":
+        if not tts.is_private_chat(message):
+            return await message.reply_text("TTS 只在 Telegram 私聊中生效。")
+        missing = tts.missing_reason()
+        if missing:
+            return await message.reply_text(f"语音生成失败: {missing}")
+        await message.reply_text("正在生成 TTS 测试语音...")
+        return await _send_tts_text(message, "这是一条 MiMo TTS 测试语音。当前使用冰糖音色，自然助理播报风格。", force=True)
+    return await message.reply_text("用法: /tts on | /tts off | /tts status | /tts test")
 
 def _review_command_body(cmd):
     cmd = (cmd or "").strip()
@@ -1110,11 +1215,12 @@ async def handle_command(update, ctx):
         return await update.message.reply_text("no")
     cmd = _normalized_command(update.message.text)
     op = cmd.split()[0] if cmd else ''
-    if op == '/help': return await update.message.reply_text(HELP_TEXT)
+    if op == '/help': return await update.message.reply_text(_TELEGRAM_HELP_TEXT)
     if op == '/status':
         llm = agent.get_llm_name() if agent.llmclient else '未配置'
         return await update.message.reply_text(f"状态: {'🔴 运行中' if agent.is_running else '🟢 空闲'}\nLLM: [{agent.llm_no}] {llm}")
     if op == '/stop': return await cmd_abort(update, ctx)
+    if op == '/tts': return await cmd_tts(update, ctx)
     if op == '/llm': return await cmd_llm(update, ctx)
     if op == '/next':
         info = agent.switch_llm(-1, persist=True)
@@ -1142,7 +1248,7 @@ async def handle_command(update, ctx):
     if op == '/continue':
         if cmd != '/continue': _cancel_stream_task(ctx)
         return await update.message.reply_text(handle_frontend_command(agent, cmd))
-    return await update.message.reply_text(HELP_TEXT)
+    return await update.message.reply_text(_TELEGRAM_HELP_TEXT)
 
 if __name__ == '__main__':
     _LOCK_SOCK = ensure_single_instance(19527, "Telegram")

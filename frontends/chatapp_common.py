@@ -28,6 +28,7 @@ TELEGRAM_MENU_COMMANDS = (
     ("continue", "列出可恢复会话；/continue n 恢复第 n 个"),
     ("btw", "临时插问主 agent 进展，不打断主线"),
     ("review", "in-session code review；/review scope 指定范围"),
+    ("tts", "MiMo 语音朗读；/tts on/off/status/test"),
     ("llm", "查看模型列表；/llm n 切换到指定模型"),
     ("next", "切换到下一个模型"),
 )
