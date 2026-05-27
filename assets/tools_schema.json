@@ -72,6 +72,13 @@
     "parameters": {"type": "object", "properties": {}}}
   },
   {"type": "function", "function": {
+    "name": "bot_update",
+    "description": "Update and restart the GenericAgent bot service through the fixed LaunchAgent updater script. Use when the user asks to update, upgrade, reload, or restart the current bot/robot, WeChat bot, Telegram bot, or paper-plane bot. Example: 'I updated the key, please update bot' means call this tool with target=current. Do not use image_generate, code_run, or free-form shell for bot updates. Do not call for requests that only ask to inspect keys, image quota, configuration, or why an update failed.",
+    "parameters": {"type": "object", "properties": {
+      "target": {"type": "string", "enum": ["current", "wechat", "telegram"], "description": "Bot to update. current uses the current frontend source: wechat messages update the WeChat bot, telegram messages update the Telegram bot.", "default": "current"},
+      "restart_delay": {"type": "integer", "description": "Seconds before LaunchAgent restart after the updater finishes", "default": 5}}}
+  }},
+  {"type": "function", "function": {
     "name": "image_generate",
     "description": "Generate an image through the current OpenAI-compatible backend and save it to the task temp directory",
     "parameters": {"type": "object", "properties": {

@@ -72,6 +72,13 @@
     "parameters": {"type": "object", "properties": {}}}
   },
   {"type": "function", "function": {
+    "name": "bot_update",
+    "description": "通过固定的 LaunchAgent 更新脚本更新并重启 GenericAgent bot 服务。当用户要求更新、升级、重载或重启当前 bot/机器人、微信 bot、Telegram bot、纸飞机 bot 时调用。例如“我已经更新了 key，请更新 bot”表示应调用 target=current。不要用 image_generate、code_run 或自由 shell 替代 bot 更新。若用户只是要求检查 key、生图额度、配置内容，或询问为什么更新失败，不要调用此工具。",
+    "parameters": {"type": "object", "properties": {
+      "target": {"type": "string", "enum": ["current", "wechat", "telegram"], "description": "要更新的 bot。current 表示根据当前前端来源推断：微信消息更新微信 bot，Telegram 消息更新 Telegram bot。", "default": "current"},
+      "restart_delay": {"type": "integer", "description": "更新脚本结束后延迟多少秒重启 LaunchAgent", "default": 5}}}
+  }},
+  {"type": "function", "function": {
     "name": "image_generate",
     "description": "通过当前 OpenAI-compatible 后端生成图片，并保存到任务临时目录",
     "parameters": {"type": "object", "properties": {

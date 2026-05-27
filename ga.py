@@ -100,6 +100,54 @@ def ask_user(question, candidates=None):
     return {"status": "INTERRUPT", "intent": "HUMAN_INTERVENTION",
         "data": {"question": question, "candidates": candidates or []}}
 
+BOT_UPDATE_TARGETS = {
+    'wechat': {
+        'label': '微信 bot',
+        'script': os.path.join(script_dir, 'assets', 'update-wechat-launchagent.sh'),
+        'log': os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'wechatapp.update.command.log'),
+        'restart_delay_env': 'WECHAT_UPDATE_RESTART_DELAY',
+    },
+    'telegram': {
+        'label': '纸飞机 bot',
+        'script': os.path.join(script_dir, 'assets', 'update-telegram-launchagent.sh'),
+        'log': os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'telegramapp.update.command.log'),
+        'restart_delay_env': 'TELEGRAM_UPDATE_RESTART_DELAY',
+    },
+}
+
+SOURCE_BOT_UPDATE_TARGET = {
+    'wechat': 'wechat',
+    'telegram': 'telegram',
+}
+
+def resolve_bot_update_target(target='current', source=None):
+    target = (target or 'current').strip().lower()
+    aliases = {
+        'current': 'current',
+        'auto': 'current',
+        'this': 'current',
+        'wechat': 'wechat',
+        'weixin': 'wechat',
+        'wx': 'wechat',
+        '微信': 'wechat',
+        '微信bot': 'wechat',
+        'telegram': 'telegram',
+        'tg': 'telegram',
+        'paperplane': 'telegram',
+        '纸飞机': 'telegram',
+        '纸飞机bot': 'telegram',
+    }
+    target = aliases.get(target, target)
+    if target == 'current':
+        source_key = (source or '').strip().lower()
+        resolved = SOURCE_BOT_UPDATE_TARGET.get(source_key)
+        if not resolved:
+            return None, f"无法从当前来源 {source!r} 推断要更新哪个 bot，请显式指定 target=wechat 或 target=telegram"
+        return resolved, None
+    if target not in BOT_UPDATE_TARGETS:
+        return None, f"不支持的 bot_update target: {target!r}，可选 current/wechat/telegram"
+    return target, None
+
 import simphtml
 driver = None
 def first_init_driver():
@@ -313,8 +361,9 @@ def _resolve_image_generation_configs(mykeys):
 
 class GenericAgentHandler(BaseHandler):
     '''Generic Agent 工具库，包含多种工具的实现。工具函数自动加上了 do_ 前缀。实际工具名没有前缀。'''
-    def __init__(self, parent, last_history=None, cwd='./temp'):
+    def __init__(self, parent, last_history=None, cwd='./temp', source=None):
         self.parent = parent
+        self.source = source
         self.working = {}
         self.cwd = cwd;  self.current_turn = 0
         self.history_info = last_history if last_history else []
@@ -356,6 +405,35 @@ class GenericAgentHandler(BaseHandler):
         else: result = yield from code_run(code, code_type, timeout, cwd, code_cwd=code_cwd, stop_signal=self.code_stop_signal, maxlen=maxlen)
         next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
         return StepOutcome(result, next_prompt=next_prompt)
+
+    def do_bot_update(self, args, response):
+        target, err = resolve_bot_update_target(args.get("target", "current"), self.source)
+        if err:
+            return StepOutcome({"status": "error", "msg": err}, next_prompt="\n")
+        cfg = BOT_UPDATE_TARGETS[target]
+        script = cfg['script']
+        log_file = cfg['log']
+        if not os.path.exists(script):
+            return StepOutcome({"status": "error", "msg": f"更新脚本不存在: {script}", "target": target}, next_prompt="\n")
+
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        try:
+            restart_delay = int(args.get("restart_delay", 5) or 5)
+        except Exception:
+            restart_delay = 5
+        env = {**os.environ, cfg['restart_delay_env']: str(restart_delay)}
+        yield f"[Action] Updating {cfg['label']} with {os.path.basename(script)}\n"
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                proc = subprocess.Popen(['/bin/bash', script], cwd=script_dir, env=env, stdout=f, stderr=subprocess.STDOUT)
+                rc = proc.wait()
+        except Exception as e:
+            return StepOutcome({"status": "error", "msg": str(e), "target": target, "log_file": log_file}, next_prompt="\n")
+
+        status = "success" if rc == 0 else "error"
+        msg = f"{cfg['label']} 更新成功，{restart_delay} 秒后自动重启。重启后可继续发消息。" if rc == 0 else f"{cfg['label']} 更新失败或已跳过，退出码 {rc}。请查看日志: {log_file}"
+        yield f"[Status] {'✅' if rc == 0 else '❌'} {msg}\n"
+        return StepOutcome({"status": status, "target": target, "exit_code": rc, "msg": msg, "log_file": log_file}, next_prompt="\n")
     
     def do_ask_user(self, args, response):
         question = args.get("question", "请提供输入：")

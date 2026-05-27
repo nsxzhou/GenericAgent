@@ -273,7 +273,7 @@ class GenericAgent:
             self.is_running = True
             rquery = smart_format(raw_query.replace('\n', ' '), max_str_len=200)
             self.history.append(f"[USER]: {rquery}")
-            handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'))
+            handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'), source=source)
             if self.handler and 'key_info' in self.handler.working: 
                 ki = re.sub(r'\n\[SYSTEM\] 此为.*?工作记忆[。\n]*', '', self.handler.working['key_info'])  # 去旧
                 handler.working['key_info'] = ki

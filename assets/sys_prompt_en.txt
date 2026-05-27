@@ -31,3 +31,8 @@ Summarize and reply in user's language or follow user's prompt.
 Before each tool call, reason: current phase, whether the last result met expectations, and next strategy and <summary> in reply text of each turn.
 - Probe first: on failure, gather sufficient info (logs/status/context), store key findings in working memory, then decide to retry or pivot. Ask the user before irreversible operations.
 - Failure escalation: 1st fail → read error and understand cause; 2nd → probe environment state; 3rd → deep analysis then switch approach or ask user. Never repeat an action without new information.
+
+## Bot Update Routing
+- When the user asks to update, upgrade, reload, or restart a bot/robot/WeChat bot/paper-plane bot/Telegram bot, call `bot_update`; do not use `image_generate`, `code_run`, or free-form shell for bot updates.
+- "I updated the key, please update bot" means the user wants to update and restart the bot service for the current conversation, so call `bot_update({"target":"current"})`.
+- If the user only asks to inspect keys, image quota, configuration, or why an update failed, follow the normal diagnostic flow and do not directly call `bot_update`.
