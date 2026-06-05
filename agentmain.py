@@ -20,6 +20,20 @@ def load_tool_schema(suffix=''):
     TOOLS_SCHEMA = json.loads(TS if os.name == 'nt' else TS.replace('powershell', 'bash'))
 load_tool_schema()
 
+LLM_DEFAULT_PATH = os.path.join(script_dir, 'temp', 'llm_default.json')
+
+def _load_llm_default():
+    try:
+        with open(LLM_DEFAULT_PATH, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_llm_default(data):
+    os.makedirs(os.path.dirname(LLM_DEFAULT_PATH), exist_ok=True)
+    with open(LLM_DEFAULT_PATH, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
 lang_suffix = '_en' if os.environ.get('GA_LANG', '') == 'en' else ''
 mem_dir = os.path.join(script_dir, 'memory')
 if not os.path.exists(mem_dir): os.makedirs(mem_dir)
@@ -47,21 +61,103 @@ class GenericAgent:
         os.makedirs(os.path.join(script_dir, 'temp'), exist_ok=True)
         self.lock = threading.Lock()
         self.task_dir = None
-        self.history = []; self.handler = None; 
+        self.history = []
+        self._llm_history = []
         self.task_queue = queue.Queue() 
-        self.is_running = False; self.stop_sig = False; self.llm_no = 0;  
-        self.inc_out = False; self.verbose = True; self.show_mode = 'text'
+        self.is_running = False; self.stop_sig = False
+        self.llm_no = None;  self.inc_out = False
+        self.handler = None; self.verbose = True
+        self._llm_default = _load_llm_default()
+        self.show_mode = 'text'
         self.peer_hint = True
         self.force_non_stream = False
         logid = f'{(time.time_ns() + random.randrange(1_000_000)) % 1_000_000:06d}'
         self.log_path = os.path.join(script_dir, f'temp/model_responses/model_responses_{logid}.txt')
         self.load_llm_sessions()
 
+    def _bind_shared_history(self):
+        if not hasattr(self, '_llm_history'):
+            self._llm_history = []
+        for client in getattr(self, 'llmclients', []) or []:
+            backend = getattr(client, 'backend', None)
+            if backend is not None and hasattr(backend, 'history'):
+                backend.history = self._llm_history
+        backend = getattr(getattr(self, 'llmclient', None), 'backend', None)
+        if backend is not None and hasattr(backend, 'history'):
+            backend.history = self._llm_history
+
+    def extend_agent_history(self, lines):
+        self.history.extend(lines or [])
+
+    def _resolve_llm_index(self, n=None):
+        if not getattr(self, 'llmclients', None):
+            raise Exception('[ERROR] no usable LLM backend found in mykey.py or mykey.json')
+        if n is None or n < 0:
+            cur = self.llm_no if isinstance(self.llm_no, int) else -1
+            return (cur + 1) % len(self.llmclients)
+        return n % len(self.llmclients)
+
+    def _find_llm_index_by_name(self, name):
+        if not name:
+            return None
+        for i, client in enumerate(getattr(self, 'llmclients', []) or []):
+            if getattr(client, 'name', None) == name:
+                return i
+        return None
+
+    def _pick_default_llm_index(self):
+        default = self._llm_default or {}
+        name = default.get('name')
+        idx = default.get('index')
+        if name:
+            i = self._find_llm_index_by_name(name)
+            if i is not None:
+                return i
+        if isinstance(idx, int) and getattr(self, 'llmclients', None):
+            return idx % len(self.llmclients)
+        return 0
+
+    def _apply_provider_side_effects(self, client=None):
+        client = self.llmclient if client is None else client
+        if client is None or isinstance(client, dict):
+            return
+        model = getattr(getattr(client, 'backend', None), 'model', '').lower()
+        if 'glm' in model or 'minimax' in model or 'kimi' in model:
+            load_tool_schema('_cn')
+        else:
+            load_tool_schema()
+        try:
+            client.last_tools = ''
+        except Exception:
+            pass
+
+    def get_tools_schema(self):
+        return TOOLS_SCHEMA
+
+    def get_current_system_prompt(self):
+        extra = getattr(getattr(self.llmclient, 'backend', None), 'extra_sys_prompt', '') if self.llmclient else ''
+        prompt = get_system_prompt() + extra
+        if getattr(self, 'peer_hint', False):
+            prompt += "\n[Peer] 用户提及其他会话/后台任务状态时: temp/model_responses/ (只找近期修改的文件尾部)\n"
+        if getattr(self, '_current_source', '') == 'telegram':
+            prompt += (
+                "\n## TTS 语音输出\n"
+                "每次回复的最后，用 <tts> 标签附上一段适合语音朗读的纯文本。规则：\n"
+                "- 使用自然口语，不要用任何 Markdown 语法（无 #、*、-、`、[]() 等）\n"
+                "- 不要包含代码、文件路径、URL；如有代码，用一句话概括它做了什么\n"
+                "- 控制在 500 字以内；如果回复很长，提炼关键结论即可\n"
+                "- 如果回复纯粹是操作状态（如\u201c已切换模型\u201d\u201c已停止\u201d），直接朗读原文\n"
+                "- 不要朗读 <thinking>、<tool_use> 等内部标签的内容\n"
+            )
+        return prompt
+
     def load_llm_sessions(self):
         mykeys, changed = reload_mykeys()
-        if not changed and hasattr(self, 'llmclients'): return
-        try: oldhistory = self.llmclient.backend.history
-        except: oldhistory = None
+        if not changed and hasattr(self, 'llmclients'):
+            self._bind_shared_history()
+            return
+        current_name = getattr(getattr(self, 'llmclient', None), 'name', None)
+        current_index = self.llm_no
         llm_sessions = []
         for k, cfg in mykeys.items():
             if not any(x in k for x in ['api', 'config', 'cookie']): continue
@@ -77,26 +173,53 @@ class GenericAgent:
                     else: llm_sessions[i] = ToolClient(mixin)
                 except Exception as e: print(f'\n\n\n[ERROR] Failed to init MixinSession with cfg {s["mixin_cfg"]}: {e}!!!\n\n')
         self.llmclients = llm_sessions
-        self.llmclient = self.llmclients[self.llm_no%len(self.llmclients)]
-        if oldhistory: self.llmclient.backend.history = oldhistory
-    
-    def next_llm(self, n=-1):
-        self.load_llm_sessions()
-        self.llm_no = ((self.llm_no + 1) if n < 0 else n) % len(self.llmclients)
-        lastc = self.llmclient
+        if not self.llmclients:
+            self.llmclient = None
+            return
+        if current_name is not None:
+            next_idx = self._find_llm_index_by_name(current_name)
+            if next_idx is None and isinstance(current_index, int):
+                next_idx = current_index
+        else:
+            next_idx = self._pick_default_llm_index()
+        self.llm_no = self._resolve_llm_index(next_idx)
         self.llmclient = self.llmclients[self.llm_no]
-        try: self.llmclient.backend.history = lastc.backend.history
-        except: raise Exception('[ERROR] BAD Mixin config: Check your mykey.py')
-        self.llmclient.last_tools = ''
-        name = self.get_llm_name(model=True)
-        if 'glm' in name or 'minimax' in name or 'kimi' in name: load_tool_schema('_cn')
-        else: load_tool_schema()
+        self._bind_shared_history()
+        self._apply_provider_side_effects()
+    
+    def switch_llm(self, n=-1, persist=True):
+        self.load_llm_sessions()
+        next_idx = self._resolve_llm_index(n)
+        self.llm_no = next_idx
+        lastc = getattr(self, 'llmclient', None)
+        self.llmclient = self.llmclients[self.llm_no]
+        self._bind_shared_history()
+        if lastc is not None:
+            try:
+                self.llmclient.backend.history = self._llm_history
+            except Exception:
+                raise Exception('[ERROR] BAD Mixin config: Check your mykey.py')
+        self._apply_provider_side_effects()
+        persisted = False
+        if persist and self.llmclient is not None:
+            self._llm_default = {'name': getattr(self.llmclient, 'name', self.get_llm_name()), 'index': self.llm_no}
+            try:
+                _save_llm_default(self._llm_default)
+                persisted = True
+            except Exception as e:
+                print(f"[WARN] Failed to persist default LLM: {e}")
+        return {'index': self.llm_no, 'name': getattr(self.llmclient, 'name', self.get_llm_name()), 'display': self.get_llm_name(), 'persisted': persisted, 'effective': 'next_turn'}
+
+    def next_llm(self, n=-1):
+        return self.switch_llm(n=n, persist=True)
+
     def list_llms(self): 
         self.load_llm_sessions()
         return [(i, self.get_llm_name(b), i == self.llm_no) for i, b in enumerate(self.llmclients)]
     def get_llm_name(self, b=None, model=False):
         b = self.llmclient if b is None else b
         if isinstance(b, dict): return 'BADCONFIG_MIXIN'
+        if b is None: return 'UNAVAILABLE'
         if model: return b.backend.model.lower()
         return f"{type(b.backend).__name__}/{b.backend.name}"
 
@@ -114,6 +237,31 @@ class GenericAgent:
     # i know it is dangerous, but raw_query is dangerous enough it doesn't enlarge
     def _handle_slash_cmd(self, raw_query, display_queue):
         if not raw_query.startswith('/'): return raw_query
+        cmd = raw_query.strip()
+        if cmd == '/next':
+            try:
+                info = self.switch_llm(-1, persist=True)
+                display_queue.put({'done': smart_format(f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", max_str_len=500), 'source': 'system'})
+            except Exception as e:
+                display_queue.put({'done': f"❌ 切换失败: {e}", 'source': 'system'})
+            return None
+        if cmd == '/llm':
+            lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in self.list_llms()]
+            display_queue.put({'done': "LLMs:\n" + "\n".join(lines), 'source': 'system'})
+            return None
+        if m := re.match(r'/llm\s+(\d+)\s*$', cmd):
+            try:
+                info = self.switch_llm(int(m.group(1)), persist=True)
+                display_queue.put({'done': smart_format(f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", max_str_len=500), 'source': 'system'})
+            except Exception as e:
+                display_queue.put({'done': f"❌ 切换失败: {e}", 'source': 'system'})
+            return None
+        if cmd.startswith('/llm'):
+            display_queue.put({'done': f"❌ 用法: /llm <0-{len(self.llmclients) - 1}>", 'source': 'system'})
+            return None
+        if cmd.startswith('/next'):
+            display_queue.put({'done': '❌ 用法: /next', 'source': 'system'})
+            return None
         if _sm := re.match(r'/session\.(\w+)=(.*)', raw_query.strip()):
             k, v = _sm.group(1), _sm.group(2)
             vfile = os.path.join(script_dir, 'temp', v)
@@ -136,46 +284,46 @@ class GenericAgent:
             if raw_query is None:
                 self.task_queue.task_done(); continue
             self.is_running = True
+            self._current_source = source
             if len(raw_query) > 1500:
                 task_file = os.path.join(script_dir, 'temp', f'user_prompt_{int(time.time())}.md')
                 with open(task_file, 'w', encoding='utf-8') as f: f.write(raw_query)
                 raw_query = f'Long user prompt saved to {task_file}. Read and execute.'
             rquery = smart_format(raw_query.replace('\n', ' '), max_str_len=200)
             self.history.append(f"[USER]: {rquery}")
-            
-            sys_prompt = get_system_prompt() + getattr(self.llmclient.backend, 'extra_sys_prompt', '')
-            if self.peer_hint: sys_prompt += f"\n[Peer] 用户提及其他会话/后台任务状态时: temp/model_responses/ (只找近期修改的文件尾部)\n"
-            handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'))
+            handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'), source=source)
             if getattr(self, 'no_print', False): handler.print = lambda *a, **k: None
             if self.handler and 'key_info' in self.handler.working: 
                 ki = re.sub(r'\n\[SYSTEM\] 此为.*?工作记忆[。\n]*', '', self.handler.working['key_info'])  # 去旧
                 handler.working['key_info'] = ki
                 handler.working['passed_sessions'] = ps = self.handler.working.get('passed_sessions', 0) + 1
                 if ps > 0: handler.working['key_info'] += f'\n[SYSTEM] 此为 {ps} 个对话前设置的key_info，若已在新任务，先更新或清除工作记忆。\n'
-            self.handler = handler  # although new handler, the **full** history is in llmclient, so it is full history!
-            self.llmclient.log_path = self.log_path
-            if self.force_non_stream:
+            self.handler = handler
+            # although new handler, the **full** history is in llmclient, so it is full history!
+            if self.llmclient is not None:
+                self.llmclient.log_path = self.log_path
+            if self.force_non_stream and self.llmclient is not None:
                 self.llmclient.backend.stream = False
                 self.llmclient.backend.read_timeout = max(self.llmclient.backend.read_timeout, 1200)
-            gen = agent_runner_loop(self.llmclient, sys_prompt, raw_query, handler, TOOLS_SCHEMA, 
-                                    max_turns=80, verbose=self.verbose, yield_info=True)
+            gen = agent_runner_loop(self, self.get_current_system_prompt, raw_query,
+                                handler, self.get_tools_schema, max_turns=80, verbose=self.verbose,
+                                yield_info=True)
             try:
                 full_resp = ""; last_pos = 0; curr_turn = 0; turn_resps = []
                 for chunk in gen:
                     if consume_file(self.task_dir, '_stop'): self.abort() 
                     if self.stop_sig: break
-                    if isinstance(chunk, dict) and 'turn' in chunk: 
+                    if isinstance(chunk, dict) and 'turn' in chunk:
                         curr_turn = chunk['turn']; turn_resps.append(''); continue
                     full_resp += chunk;  turn_resps[-1] += chunk
                     if len(full_resp) - last_pos > 30 or 'LLM Running' in chunk:
-                        display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp, 
+                        display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp,
                                            'source': source, 'turn': curr_turn, 'outputs': turn_resps[-2:]})
                         last_pos = len(full_resp)
-                if self.inc_out and last_pos < len(full_resp):
-                    display_queue.put({'next': full_resp[last_pos:], 'source': source,
-                                    'turn': curr_turn, 'outputs': turn_resps[-2:]})
+                if self.inc_out and last_pos < len(full_resp): display_queue.put({'next': full_resp[last_pos:], 'source': source,
+                                                                                  'turn': curr_turn, 'outputs': turn_resps[-2:]})
                 #if '</summary>' in full_resp: full_resp = full_resp.replace('</summary>', '</summary>\n\n')
-                #if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)                
+                #if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)
                 display_queue.put({'done': full_resp, 'source': source, 'turn': curr_turn, 'outputs': turn_resps.copy()})
                 self.history = handler.history_info
             except Exception as e:
@@ -187,7 +335,7 @@ class GenericAgent:
                 self.task_queue.task_done()
                 if self.handler is not None: self.handler.code_stop_signal.append(1)
 
-GeneraticAgent = GenericAgent    
+GeneraticAgent = GenericAgent
 
 if __name__ == '__main__':
     import argparse
@@ -196,15 +344,15 @@ if __name__ == '__main__':
     parser.add_argument('--task', metavar='IODIR', help='一次性任务模式(文件IO)')
     parser.add_argument('--reflect', metavar='SCRIPT', help='反射模式：加载监控脚本，check()触发时发任务')
     parser.add_argument('--input', help='prompt')
-    parser.add_argument('--llm_no', type=int, default=0)
+    parser.add_argument('--llm_no', type=int, default=None)
     parser.add_argument('--verbose', action='store_true')
-    parser.add_argument('--nobg', action='store_true')
+    parser.add_argument('--bg', action='store_true', help='popen, print PID, exit')
     args, _unknown = parser.parse_known_args()
     _reflect_args = dict(zip([k.lstrip('-') for k in _unknown[::2]], _unknown[1::2])) if _unknown else {}
 
-    if args.task and not args.nobg:
+    if args.bg:
         import subprocess, platform
-        cmd = [sys.executable, os.path.abspath(__file__)] + [a for a in sys.argv[1:]] + ['--nobg']
+        cmd = [sys.executable, os.path.abspath(__file__)] + [a for a in sys.argv[1:] if a != '--bg']
         d = os.path.join(script_dir, f'temp/{args.task}'); os.makedirs(d, exist_ok=True)
         p = subprocess.Popen(cmd, cwd=script_dir,
             creationflags=0x08000000 if platform.system() == 'Windows' else 0,
@@ -213,7 +361,8 @@ if __name__ == '__main__':
         print('PID:', p.pid); sys.exit(0)
 
     agent = GeneraticAgent()
-    agent.next_llm(args.llm_no)
+    if args.llm_no is not None:
+        agent.switch_llm(args.llm_no, persist=False)
     agent.verbose = args.verbose
     threading.Thread(target=agent.run, daemon=True).start()
 
@@ -298,7 +447,12 @@ if __name__ == '__main__':
                 while True:
                     item = dq.get()
                     if 'next' in item: print(item['next'], end='', flush=True)
-                    if 'done' in item: print(); break
+                    if 'done' in item:
+                        if item.get('source') == 'system':
+                            print(item['done'])
+                        else:
+                            print()
+                        break
             except KeyboardInterrupt:
                 agent.abort()
                 print('\n[Interrupted]')

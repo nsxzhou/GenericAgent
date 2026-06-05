@@ -7,6 +7,7 @@ if sys.stderr is None: sys.stderr = open(os.devnull, "w")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_loop import BaseHandler, StepOutcome, json_default
+from llmcore import openai_compatible_image_generation, reload_mykeys
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 def safe_print(*args, **kwargs):
@@ -101,6 +102,54 @@ def ask_user(question, candidates=None):
     """question: 向用户提出的问题。candidates: 可选的候选项列表"""
     return {"status": "INTERRUPT", "intent": "HUMAN_INTERVENTION",
         "data": {"question": question, "candidates": candidates or []}}
+
+BOT_UPDATE_TARGETS = {
+    'wechat': {
+        'label': '微信 bot',
+        'script': os.path.join(script_dir, 'assets', 'update-wechat-launchagent.sh'),
+        'log': os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'wechatapp.update.command.log'),
+        'restart_delay_env': 'WECHAT_UPDATE_RESTART_DELAY',
+    },
+    'telegram': {
+        'label': '纸飞机 bot',
+        'script': os.path.join(script_dir, 'assets', 'update-telegram-launchagent.sh'),
+        'log': os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'telegramapp.update.command.log'),
+        'restart_delay_env': 'TELEGRAM_UPDATE_RESTART_DELAY',
+    },
+}
+
+SOURCE_BOT_UPDATE_TARGET = {
+    'wechat': 'wechat',
+    'telegram': 'telegram',
+}
+
+def resolve_bot_update_target(target='current', source=None):
+    target = (target or 'current').strip().lower()
+    aliases = {
+        'current': 'current',
+        'auto': 'current',
+        'this': 'current',
+        'wechat': 'wechat',
+        'weixin': 'wechat',
+        'wx': 'wechat',
+        '微信': 'wechat',
+        '微信bot': 'wechat',
+        'telegram': 'telegram',
+        'tg': 'telegram',
+        'paperplane': 'telegram',
+        '纸飞机': 'telegram',
+        '纸飞机bot': 'telegram',
+    }
+    target = aliases.get(target, target)
+    if target == 'current':
+        source_key = (source or '').strip().lower()
+        resolved = SOURCE_BOT_UPDATE_TARGET.get(source_key)
+        if not resolved:
+            return None, f"无法从当前来源 {source!r} 推断要更新哪个 bot，请显式指定 target=wechat 或 target=telegram"
+        return resolved, None
+    if target not in BOT_UPDATE_TARGETS:
+        return None, f"不支持的 bot_update target: {target!r}，可选 current/wechat/telegram"
+    return target, None
 
 import simphtml
 driver = None
@@ -265,10 +314,59 @@ def consume_file(dr, file):
         os.remove(os.path.join(dr, file))
         return content
 
+def _safe_path_name(value, fallback='image.png'):
+    name = os.path.basename(str(value or '').strip())
+    if not name or name in ('.', '..'):
+        return fallback
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', name)
+
+def _resolve_image_generation_configs(mykeys):
+    configs = []
+    seen_ids = set()
+
+    def add_cfg(name, cfg):
+        if not isinstance(cfg, dict):
+            return
+        ident = id(cfg)
+        if ident in seen_ids:
+            return
+        seen_ids.add(ident)
+        configs.append((name, cfg))
+
+    for key in ('image_generation_configs',):
+        val = mykeys.get(key)
+        if isinstance(val, (list, tuple)):
+            for idx, cfg in enumerate(val):
+                add_cfg(f'{key}[{idx}]', cfg)
+
+    for key in (
+        'image_generation_config',
+        'image_config',
+        'img_config',
+        'oai_image_config',
+    ):
+        add_cfg(key, mykeys.get(key))
+
+    for key, val in mykeys.items():
+        if key.startswith('image_generation_config') and key not in ('image_generation_config', 'image_generation_configs'):
+            add_cfg(key, val)
+
+    indexed = []
+    for idx, (name, cfg) in enumerate(configs):
+        priority = cfg.get('priority', 0)
+        try:
+            priority = int(priority)
+        except Exception:
+            priority = 0
+        indexed.append((idx, priority, name, cfg))
+    indexed.sort(key=lambda x: (-x[1], x[0]))
+    return [(name, cfg) for _, _, name, cfg in indexed]
+
 class GenericAgentHandler(BaseHandler):
     '''Generic Agent 工具库，包含多种工具的实现。工具函数自动加上了 do_ 前缀。实际工具名没有前缀。'''
-    def __init__(self, parent, last_history=None, cwd='./temp'):
+    def __init__(self, parent, last_history=None, cwd='./temp', source=None):
         self.parent = parent
+        self.source = source
         self.working = {}
         self.cwd = cwd;  self.current_turn = 0
         self.history_info = last_history if last_history else []
@@ -311,6 +409,35 @@ class GenericAgentHandler(BaseHandler):
         else: result = yield from code_run(code, code_type, timeout, cwd, code_cwd=code_cwd, stop_signal=self.code_stop_signal, maxlen=maxlen, myprint=self.print)
         next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
         return StepOutcome(result, next_prompt=next_prompt)
+
+    def do_bot_update(self, args, response):
+        target, err = resolve_bot_update_target(args.get("target", "current"), self.source)
+        if err:
+            return StepOutcome({"status": "error", "msg": err}, next_prompt="\n")
+        cfg = BOT_UPDATE_TARGETS[target]
+        script = cfg['script']
+        log_file = cfg['log']
+        if not os.path.exists(script):
+            return StepOutcome({"status": "error", "msg": f"更新脚本不存在: {script}", "target": target}, next_prompt="\n")
+
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        try:
+            restart_delay = int(args.get("restart_delay", 5) or 5)
+        except Exception:
+            restart_delay = 5
+        env = {**os.environ, cfg['restart_delay_env']: str(restart_delay)}
+        yield f"[Action] Updating {cfg['label']} with {os.path.basename(script)}\n"
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                proc = subprocess.Popen(['/bin/bash', script], cwd=script_dir, env=env, stdout=f, stderr=subprocess.STDOUT)
+                rc = proc.wait()
+        except Exception as e:
+            return StepOutcome({"status": "error", "msg": str(e), "target": target, "log_file": log_file}, next_prompt="\n")
+
+        status = "success" if rc == 0 else "error"
+        msg = f"{cfg['label']} 更新成功，{restart_delay} 秒后自动重启。重启后可继续发消息。" if rc == 0 else f"{cfg['label']} 更新失败或已跳过，退出码 {rc}。请查看日志: {log_file}"
+        yield f"[Status] {'✅' if rc == 0 else '❌'} {msg}\n"
+        return StepOutcome({"status": status, "target": target, "exit_code": rc, "msg": msg, "log_file": log_file}, next_prompt="\n")
     
     def do_ask_user(self, args, response):
         question = args.get("question", "请提供输入：")
@@ -522,6 +649,107 @@ class GenericAgentHandler(BaseHandler):
         if os.path.exists(path): result = 'This is L0:\n' + file_read(path, show_linenos=False)
         else: result = "Memory Management SOP not found. Do not update memory."
         return StepOutcome(result, next_prompt=prompt)
+
+    def do_image_generate(self, args, response):
+        '''调用 OpenAI-compatible 生图接口，保存结果到任务临时目录。'''
+        prompt = (args.get("prompt") or "").strip()
+        if not prompt:
+            return StepOutcome({"status": "error", "msg": "prompt 不能为空"}, next_prompt="\n")
+        model = args.get("model") or None
+        size = args.get("size") or None
+        quality = args.get("quality") or None
+        style = args.get("style") or None
+        background = args.get("background") or None
+        n = args.get("n", 1)
+        response_format = args.get("response_format", "b64_json")
+        output_format = args.get("output_format") or args.get("format")
+        user = args.get("user") or None
+        config_name = (args.get("config_name") or "").strip() or None
+        config_index = args.get("config_index")
+        extra = args.get("extra")
+        if isinstance(extra, str):
+            try:
+                extra = json.loads(extra)
+            except Exception:
+                extra = None
+        try:
+            mykeys, _ = reload_mykeys()
+            cfgs = _resolve_image_generation_configs(mykeys)
+            if not cfgs:
+                raise KeyError("未找到 image_generation_config / image_generation_configs / image_config / img_config / oai_image_config")
+            if config_index is not None:
+                try:
+                    config_index = int(config_index)
+                except Exception:
+                    raise ValueError("config_index 必须是整数")
+                if config_index < 0 or config_index >= len(cfgs):
+                    raise IndexError(f"config_index 越界: {config_index}, 可用范围 0..{len(cfgs)-1}")
+                cfgs = [cfgs[config_index]]
+            if config_name:
+                filtered = [(name, cfg) for name, cfg in cfgs if name == config_name or cfg.get('name') == config_name]
+                if not filtered:
+                    raise KeyError(f"未找到名为 {config_name!r} 的生图配置")
+                cfgs = filtered
+
+            result = None
+            cfg_name = None
+            errors = []
+            for name, cfg in cfgs:
+                try:
+                    result = openai_compatible_image_generation(
+                        cfg,
+                        prompt,
+                        model=model,
+                        size=size,
+                        n=n,
+                        quality=quality,
+                        style=style,
+                        background=background,
+                        response_format=response_format,
+                        user=user,
+                        output_format=output_format,
+                        extra=extra,
+                    )
+                    cfg_name = name
+                    break
+                except Exception as e:
+                    errors.append(f"{name}: {e}")
+                    continue
+            if result is None:
+                raise RuntimeError("所有生图配置都失败了: " + " | ".join(errors[-5:]))
+        except Exception as e:
+            return StepOutcome({"status": "error", "msg": str(e)}, next_prompt="\n")
+
+        out_dir = os.path.join(self.cwd, "generated_images")
+        os.makedirs(out_dir, exist_ok=True)
+        saved = []
+        for item in result.get("images", []):
+            idx = item.get("index", len(saved))
+            ext = item.get("ext") or ".png"
+            fname = _safe_path_name(f"generated_{int(time.time())}_{idx}{ext}", f"generated_{idx}{ext}")
+            fpath = os.path.join(out_dir, fname)
+            with open(fpath, "wb") as f:
+                f.write(item["bytes"])
+            saved.append({
+                "path": fpath,
+                "filename": fname,
+                "index": idx,
+                "ext": ext,
+                "mime_type": item.get("mime_type"),
+                "source": item.get("source"),
+                "revised_prompt": item.get("revised_prompt"),
+            })
+        response_data = {
+            "status": "success",
+            "endpoint": result.get("endpoint"),
+            "config_name": cfg_name,
+            "available_configs": [name for name, _ in cfgs],
+            "model": model or result.get("request", {}).get("model"),
+            "prompt": prompt,
+            "images": saved,
+        }
+        yield f"[Info] Generated {len(saved)} image(s) via {result.get('endpoint')}\n"
+        return StepOutcome(response_data, next_prompt=self._get_anchor_prompt(skip=args.get('_index', 0) > 0))
 
     def _fold_earlier(self, lines):
         FALLBACK = '直接回答了用户问题'

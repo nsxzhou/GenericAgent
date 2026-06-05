@@ -335,7 +335,7 @@ def _save_image_data(data_url: str, img_id: str) -> str:
 
 def normalize_prompt(prompt: Any, images: Optional[list] = None):
     """Normalize prompt and images.
-    
+
     images: list of dicts {"id": "img-xxx", "dataUrl": "data:..."} or plain data URLs.
     Returns: (prompt_text_with_image_tags, image_ids_list)
     """

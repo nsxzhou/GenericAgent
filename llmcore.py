@@ -1,5 +1,6 @@
-import os, json, re, time, requests, sys, threading, urllib3, base64, importlib, uuid
+import os, json, re, time, requests, sys, threading, urllib3, base64, importlib, uuid, mimetypes
 from datetime import datetime
+from urllib.parse import urlparse
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _RESP_CACHE_KEY = str(uuid.uuid4())
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -433,6 +434,144 @@ def _prepare_oai_tools(tools, api_mode="chat_completions"):
         return resp_tools
     return tools
 
+def _cfg_get(cfg, key, default=None):
+    if isinstance(cfg, dict): return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+def _cfg_proxies(cfg):
+    proxies = _cfg_get(cfg, 'proxies')
+    if isinstance(proxies, dict) and proxies: return proxies
+    proxy = _cfg_get(cfg, 'proxy')
+    return {"http": proxy, "https": proxy} if proxy else None
+
+def _cfg_verify(cfg):
+    return _cfg_get(cfg, 'verify', True)
+
+def _normalize_image_ext(ext, default='.png'):
+    if not ext: return default
+    ext = ext.lower().strip()
+    if not ext.startswith('.'): ext = '.' + ext
+    if ext == '.jpe': ext = '.jpg'
+    if ext == '.jpeg': ext = '.jpg'
+    if ext not in {'.png', '.jpg', '.webp', '.gif', '.bmp', '.tif', '.tiff'}:
+        return default
+    return ext
+
+def _ext_from_mime(mime, default='.png'):
+    if not mime: return default
+    mime = mime.split(';', 1)[0].strip().lower()
+    if not mime: return default
+    ext = mimetypes.guess_extension(mime) or default
+    return _normalize_image_ext(ext, default)
+
+def _ext_from_url(url, default='.png'):
+    try:
+        ext = Path(urlparse(url).path).suffix
+    except Exception:
+        ext = ''
+    return _normalize_image_ext(ext, default)
+
+def openai_compatible_image_generation(cfg, prompt, *, model=None, size=None, n=1,
+                                      quality=None, style=None, background=None,
+                                      response_format='b64_json', user=None, output_format=None,
+                                      timeout=None, extra=None):
+    """Call an OpenAI-compatible image generation endpoint and normalize the response."""
+    api_base = _cfg_get(cfg, 'apibase') or _cfg_get(cfg, 'api_base')
+    api_key = _cfg_get(cfg, 'apikey') or _cfg_get(cfg, 'api_key')
+    if not api_base or not api_key:
+        raise ValueError("Missing apibase/api_key for image generation")
+    payload = {
+        "prompt": prompt,
+        "n": max(1, int(n or 1)),
+    }
+    model = model or _cfg_get(cfg, 'image_model') or _cfg_get(cfg, 'image_generation_model') or _cfg_get(cfg, 'model')
+    if model: payload["model"] = model
+    if size: payload["size"] = size
+    if quality: payload["quality"] = quality
+    if style: payload["style"] = style
+    if background: payload["background"] = background
+    if response_format: payload["response_format"] = response_format
+    if user: payload["user"] = user
+    if output_format: payload["output_format"] = output_format
+    if extra: payload.update(extra)
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    proxies = _cfg_proxies(cfg)
+    verify = _cfg_verify(cfg)
+    if timeout is None:
+        ct = int(_cfg_get(cfg, 'connect_timeout', 10) or 10)
+        rt = int(_cfg_get(cfg, 'read_timeout', 120) or 120)
+        timeout = (ct, rt)
+    endpoints = []
+    for suffix in ("images/generation", "images/generations"):
+        url = auto_make_url(api_base, suffix)
+        if url not in endpoints: endpoints.append(url)
+
+    last_error = None
+    resp = None
+    used_endpoint = None
+    for idx, url in enumerate(endpoints):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout, proxies=proxies, verify=verify)
+        except requests.RequestException as e:
+            last_error = e
+            if idx == 0 and len(endpoints) > 1:
+                continue
+            raise
+        if resp.status_code in (404, 405) and idx == 0 and len(endpoints) > 1:
+            last_error = RuntimeError(f"image endpoint not found: {url} ({resp.status_code})")
+            continue
+        try:
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            last_error = e
+            raise
+        used_endpoint = url
+        break
+    if resp is None or used_endpoint is None:
+        raise last_error or RuntimeError("image generation request failed")
+
+    try:
+        data = resp.json()
+    except Exception as e:
+        raise ValueError(f"Invalid image generation JSON: {type(e).__name__}: {e}")
+    items = data.get("data") or []
+    if not items:
+        raise ValueError(f"Image generation returned empty data: {data!r}")
+
+    normalized = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"Invalid image item at index {i}: {item!r}")
+        entry = {
+            "index": i,
+            "revised_prompt": item.get("revised_prompt"),
+            "url": item.get("url"),
+            "b64_json": item.get("b64_json"),
+            "raw": item,
+        }
+        if entry["b64_json"]:
+            raw_bytes = base64.b64decode(entry["b64_json"])
+            ext = _normalize_image_ext(data.get("output_format") or item.get("output_format") or output_format or ".png")
+            mime_type = _cfg_get(item, 'mime_type') or f"image/{ext.lstrip('.')}"
+            entry.update({"bytes": raw_bytes, "ext": ext, "mime_type": mime_type, "source": "b64_json"})
+        elif entry["url"]:
+            img_resp = requests.get(entry["url"], timeout=timeout, proxies=proxies, verify=verify)
+            img_resp.raise_for_status()
+            raw_bytes = img_resp.content
+            ext = _ext_from_mime(img_resp.headers.get("content-type"), _ext_from_url(entry["url"]))
+            entry.update({"bytes": raw_bytes, "ext": ext, "mime_type": img_resp.headers.get("content-type"), "source": "url"})
+        else:
+            raise ValueError(f"Image item missing b64_json/url at index {i}: {item!r}")
+        normalized.append(entry)
+
+    return {
+        "endpoint": used_endpoint,
+        "request": payload,
+        "response": data,
+        "images": normalized,
+    }
+
 def _to_responses_input(messages):
     result, pending = [], []
     for msg in messages:
@@ -526,7 +665,7 @@ class BaseSession:
         self.context_win = cfg.get('context_win', default_context_win)
         self.history = []; self.lock = threading.Lock(); self.system = ""
         self.name = cfg.get('name', self.model)
-        proxy = cfg.get('proxy'); 
+        proxy = cfg.get('proxy');
         self.proxies = {"http": proxy, "https": proxy} if proxy else None
         self.max_retries = max(0, int(cfg.get('max_retries', 4)))
         self.verify = cfg.get('verify', True)

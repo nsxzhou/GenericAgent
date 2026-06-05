@@ -143,5 +143,5 @@ frontends/conductor_im_plugins/config.local.json
 
 # Universal: never track __pycache__ anywhere
 **/__pycache__/
-
+.ace-tool/
 .claude/

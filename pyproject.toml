@@ -29,11 +29,20 @@ ui = [
     "rich>=13.0",
     "pillow>=9.0",
 ]
+wechat = [
+    "pycryptodome>=3.19",
+    "qrcode>=7.4",
+    "pillow>=10.0",
+]
+telegram = [
+    "python-telegram-bot>=20.0",
+]
 all-frontends = [
     "python-telegram-bot>=20.0",
     "qq-botpy>=1.0",
     "pycryptodome>=3.19",
     "qrcode>=7.4",
+    "pillow>=10.0",
     "lark-oapi>=1.0",
     "wecom-aibot-sdk>=1.0",
     "dingtalk-stream>=0.20",

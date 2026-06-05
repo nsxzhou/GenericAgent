@@ -17,6 +17,7 @@ except (ImportError, AttributeError):
 import time, json, re, threading, queue
 from datetime import datetime
 from agentmain import GeneraticAgent
+from frontends.continue_cmd import reset_conversation
 
 st.set_page_config(page_title="Cowork", layout="wide")
 
@@ -968,12 +969,13 @@ with st.chat_message("assistant"):
 def render_sidebar():
     llm_options, current_idx = agent.list_llms(), agent.llm_no
     st.session_state.selected_llm_idx = current_idx
+    st.session_state.sidebar_llm_select = current_idx
     llm_labels = {idx: f"{idx}: {(name or '').strip()}" for idx, name, _ in llm_options}
     st.caption(f"当前使用的LLM为：{current_idx}: {agent.get_llm_name()}", help="可在下方选择链路")
     st.markdown(f'<div data-testid="sidebar-llm-max-label" style="display:none">{html.escape(max(llm_labels.values(), key=len, default=""))}</div>', unsafe_allow_html=True)
     selected_idx = st.selectbox("选择链路：", [idx for idx, _, _ in llm_options], index=next((i for i, (idx, _, _) in enumerate(llm_options) if idx == current_idx), 0), format_func=llm_labels.get, key="sidebar_llm_select")
     if selected_idx != current_idx:
-        agent.next_llm(selected_idx)
+        agent.switch_llm(selected_idx, persist=True)
         st.session_state.selected_llm_idx = selected_idx
         st.toast(f"已切换到备用链路：{llm_labels[selected_idx]}")
         st.rerun()
@@ -1043,7 +1045,37 @@ def render_streaming_area():
 for msg in st.session_state.messages: render_message(msg["role"], msg["content"], ts=msg.get("time", ""), unsafe_allow_html=True)
 if st.session_state.streaming: render_streaming_area()
 if prompt := st.chat_input("请输入指令", disabled=st.session_state.streaming):
+    cmd = (prompt or "").strip()
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if cmd == "/new":
+        st.session_state.messages = [{"role": "assistant", "content": reset_conversation(agent), "time": ts}]
+        st.rerun()
+    if cmd == "/next":
+        info = agent.switch_llm(-1, persist=True)
+        st.session_state.selected_llm_idx = info["index"]
+        st.session_state.sidebar_llm_select = info["index"]
+        st.session_state.messages.extend([
+            {"role": "user", "content": cmd, "time": ts},
+            {"role": "assistant", "content": f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", "time": ts},
+        ])
+        st.rerun()
+    if cmd == "/llm" or re.match(r'/llm\s+\d+\s*$', cmd):
+        if cmd == "/llm":
+            lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in agent.list_llms()]
+            result = "LLMs:\n" + "\n".join(lines)
+        else:
+            try:
+                info = agent.switch_llm(int(cmd.split()[1]), persist=True)
+                st.session_state.selected_llm_idx = info["index"]
+                st.session_state.sidebar_llm_select = info["index"]
+                result = f"✅ 已切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)"
+            except Exception as e:
+                result = f"❌ 切换失败: {e}"
+        st.session_state.messages.extend([
+            {"role": "user", "content": cmd, "time": ts},
+            {"role": "assistant", "content": result, "time": ts},
+        ])
+        st.rerun()
     st.session_state.messages.append({"role": "user", "content": prompt, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     start_agent_task(prompt)
     st.rerun()
-

@@ -1101,7 +1101,7 @@ _ANSI_SGR_RE = re.compile(r'\x1b\[[0-9;]*m')
 # (agent_loop.py:52).  TUI v3 sets task_dir (for `_stop` signal + `!cmd`
 # shell history via `_intervene`), so we must match both forms.
 _TURN_MARKER_RE = re.compile(r'\*\*(?:LLM Running \()?Turn (\d+)\)?[^\n]*?\*\*')
-_META_TAG_RE = re.compile(r'<(?:thinking|summary|tool_use|file_content)>.*?</(?:thinking|summary|tool_use|file_content)>', re.DOTALL)
+_META_TAG_RE = re.compile(r'<(?:thinking|summary|tool_use|file_content|tts)>.*?</(?:thinking|summary|tool_use|file_content|tts)>', re.DOTALL)
 _TOOL_USE_BLOCK_RE = re.compile(r'```json\s*\{[^}]*"tool_name"[^}]*\}\s*```', re.DOTALL)
 _TOOL_USE_TAG_RE = re.compile(r'<tool_use>\s*\{.*?"tool_name"\s*:\s*"([^"]+)".*?\}\s*</tool_use>', re.DOTALL)
 _SUMMARY_RE = re.compile(r'<summary>\s*(.*?)\s*</summary>', re.DOTALL)

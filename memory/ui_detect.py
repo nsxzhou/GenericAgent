@@ -150,5 +150,3 @@ def visualize(image_path, elements, output_path=None):
         draw.text((x1, y1-16), tag[:15], fill=color, font=font)
     if output_path: img.save(output_path)
     return img
-
-

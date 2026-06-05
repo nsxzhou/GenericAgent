@@ -70,5 +70,28 @@
     "name": "start_long_term_update",
     "description": "准备开始提炼记忆。发现值得长期记忆的信息（环境事实/用户偏好/避坑经验）时调用此工具。已记忆更新或在自主流程内时无需调用。超15轮完成的任务必须调用以沉淀经验",
     "parameters": {"type": "object", "properties": {}}}
-  }
+  },
+  {"type": "function", "function": {
+    "name": "bot_update",
+    "description": "通过固定的 LaunchAgent 更新脚本更新并重启 GenericAgent bot 服务。当用户要求更新、升级、重载或重启当前 bot/机器人、微信 bot、Telegram bot、纸飞机 bot 时调用。例如“我已经更新了 key，请更新 bot”表示应调用 target=current。不要用 image_generate、code_run 或自由 shell 替代 bot 更新。若用户只是要求检查 key、生图额度、配置内容，或询问为什么更新失败，不要调用此工具。",
+    "parameters": {"type": "object", "properties": {
+      "target": {"type": "string", "enum": ["current", "wechat", "telegram"], "description": "要更新的 bot。current 表示根据当前前端来源推断：微信消息更新微信 bot，Telegram 消息更新 Telegram bot。", "default": "current"},
+      "restart_delay": {"type": "integer", "description": "更新脚本结束后延迟多少秒重启 LaunchAgent", "default": 5}}}
+  }},
+  {"type": "function", "function": {
+    "name": "image_generate",
+    "description": "通过当前 OpenAI-compatible 后端生成图片，并保存到任务临时目录",
+    "parameters": {"type": "object", "properties": {
+      "prompt": {"type": "string", "description": "图片提示词"},
+      "model": {"type": "string", "description": "可选的图片模型覆盖"},
+      "size": {"type": "string", "description": "可选尺寸，例如 1024x1024"},
+      "n": {"type": "integer", "description": "生成图片数量", "default": 1},
+      "quality": {"type": "string", "description": "可选质量提示"},
+      "style": {"type": "string", "description": "可选风格提示"},
+      "background": {"type": "string", "description": "可选背景提示"},
+      "response_format": {"type": "string", "description": "可选返回格式，默认 b64_json"},
+      "output_format": {"type": "string", "description": "可选保存文件格式覆盖"},
+      "user": {"type": "string", "description": "可选最终用户标识"},
+      "extra": {"type": "object", "description": "可选的额外 provider 字段"}}}
+  }}
 ]

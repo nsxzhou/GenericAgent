@@ -1,10 +1,12 @@
-import os, sys, re, threading, queue, time, socket, json, struct, base64, uuid, hashlib, math
+import os, sys, re, threading, queue, time, socket, json, struct, base64, uuid, webbrowser, hashlib, math, subprocess
 from pathlib import Path
 from urllib.parse import quote
 import requests, qrcode
 from Crypto.Cipher import AES
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp')
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_WECHAT_UPDATE_SCRIPT = os.path.join(_PROJECT_ROOT, 'assets', 'update-wechat-launchagent.sh')
 from agentmain import GeneraticAgent
 
 # ── AuthExpired (errcode -14 from getUpdates) ──
@@ -30,6 +32,32 @@ CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
 
 def _uin():
     return base64.b64encode(str(struct.unpack('>I', os.urandom(4))[0]).encode()).decode()
+
+def _image_size(raw):
+    try:
+        if raw.startswith(b'\x89PNG\r\n\x1a\n') and len(raw) >= 24:
+            return struct.unpack('>II', raw[16:24])
+        if raw.startswith(b'GIF87a') or raw.startswith(b'GIF89a'):
+            return struct.unpack('<HH', raw[6:10])
+        if raw.startswith(b'\xff\xd8'):
+            i = 2
+            while i + 9 < len(raw):
+                if raw[i] != 0xff:
+                    i += 1
+                    continue
+                marker = raw[i + 1]
+                i += 2
+                if marker in (0xd8, 0xd9):
+                    continue
+                if i + 2 > len(raw):
+                    break
+                seg_len = struct.unpack('>H', raw[i:i + 2])[0]
+                if marker in (0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf):
+                    return struct.unpack('>HH', raw[i + 3:i + 7])[::-1]
+                i += seg_len
+    except Exception:
+        pass
+    return 0, 0
 
 class WxBotClient:
     def __init__(self, token=None, token_file=None):
@@ -159,15 +187,19 @@ class WxBotClient:
         ciphertext_size = ((len(raw) // 16) + 1) * 16
         thumb_raw = b''; thumb_w = thumb_h = 0; thumb_ciphertext_size = 0
         if item_key == 'image_item':
-            from io import BytesIO
-            from PIL import Image
-            im = Image.open(fp); im.thumbnail((240, 240))
-            thumb_w, thumb_h = im.size
-            if im.mode not in ('RGB', 'L'):
-                im = im.convert('RGB')
-            bio = BytesIO(); im.save(bio, format='JPEG', quality=85)
-            thumb_raw = bio.getvalue()
-            thumb_ciphertext_size = ((len(thumb_raw) // 16) + 1) * 16
+            thumb_w, thumb_h = _image_size(raw)
+            try:
+                from io import BytesIO
+                from PIL import Image
+                im = Image.open(fp); im.thumbnail((240, 240))
+                thumb_w, thumb_h = im.size
+                if im.mode not in ('RGB', 'L'):
+                    im = im.convert('RGB')
+                bio = BytesIO(); im.save(bio, format='JPEG', quality=85)
+                thumb_raw = bio.getvalue()
+                thumb_ciphertext_size = ((len(thumb_raw) // 16) + 1) * 16
+            except ImportError as e:
+                print(f'[WX] PIL unavailable, reusing original image as thumbnail: {e}', file=sys.__stdout__)
         body = {
             'filekey': filekey, 'media_type': media_type, 'to_user_id': to_user_id,
             'rawsize': len(raw), 'rawfilemd5': hashlib.md5(raw).hexdigest(),
@@ -189,7 +221,7 @@ class WxBotClient:
         elif item_key == 'image_item':
             thumb_param = resp.get('thumb_upload_param', '')
             thumb_url = resp.get('thumb_upload_full_url', '')
-            if thumb_param or thumb_url:
+            if thumb_raw and (thumb_param or thumb_url):
                 thumb_media = self._upload(filekey, thumb_param, thumb_raw, aes_key=aes_key, upload_url=thumb_url)
                 thumb_size = thumb_ciphertext_size
             else:
@@ -273,8 +305,19 @@ def _dl_media(items):
 agent = GeneraticAgent()
 agent.verbose = False
 
-_TAG_PATS = [r'<' + t + r'>.*?</' + t + r'>' for t in ('thinking', 'tool_use')]
-_TAG_PATS.append(r'<file_content>.*?</file_content>')
+_HIDDEN_TAGS = ('thinking', 'think', 'summary', 'tool_use', 'tool_call', 'tool_result', 'file_content')
+_TAG_PATS = [r'<' + t + r'\b[^>]*>.*?</' + t + r'>' for t in _HIDDEN_TAGS]
+_TURN_MARKER_RE = re.compile(r'^\s*\*{0,2}LLM Running \(Turn \d+\) \.\.\.\*{0,2}\s*$', re.M)
+_PROCESS_LINE_RE = re.compile(
+    r'^\s*(?:'
+    r'🛠️.*|'
+    r'\[(?:Info|Action|Status|Warn|Warning)\].*|'
+    r'\[WX\].*|'
+    r'Waiting for your answer \.\.\..*'
+    r')\s*$',
+    re.M,
+)
+_WX_TEXT_LIMIT = 2000
 
 def _strip_md(t):
     """Filter markdown for WeChat rich-text rendering.
@@ -303,12 +346,66 @@ def _strip_md(t):
     return re.sub(r'\n{3,}', '\n\n', t).strip()
 
 def _clean(t):
-    t = re.sub(r'^\s*LLM Running \(Turn \d+\) \.{3}\s*$', '', t, flags=re.M)
-    t = re.sub(r'^\s*🛠️\s*[A-Za-z_][A-Za-z0-9_]*\(.*$', '', t, flags=re.M)
+    t = _TURN_MARKER_RE.sub('', t or '')
+    t = _PROCESS_LINE_RE.sub('', t)
     for p in _TAG_PATS:
-        t = re.sub(p, '', t, flags=re.DOTALL)
-    t = re.sub(r'</?summary>', '', t)
-    return re.sub(r'\n{3,}', '\n\n', _strip_md(t)).strip()
+        t = re.sub(p, '', t, flags=re.DOTALL | re.IGNORECASE)
+    t = re.sub(r'</?(?:' + '|'.join(_HIDDEN_TAGS) + r')\b[^>]*>', '', t, flags=re.IGNORECASE)
+    return re.sub(r'\n{3,}', '\n\n', _strip_md(t)).strip() or '...'
+
+def _turn_parts(t):
+    _ph = []
+    safe = re.sub(r'`{4,}.*?`{4,}', lambda m: (_ph.append(m.group(0)), f'\x00PH{len(_ph)-1}\x00')[1], t, flags=re.DOTALL)
+    parts = re.split(r'(\**LLM Running \(Turn \d+\) \.\.\.\**)', safe)
+    parts = [re.sub(r'\x00PH(\d+)\x00', lambda m: _ph[int(m.group(1))], p) for p in parts]
+    if len(parts) < 4: return [], t
+    turns = [parts[i] + (parts[i+1] if i+1 < len(parts) else '') for i in range(1, len(parts), 2)]
+    return (([parts[0]] if parts[0].strip() else []) + turns[:-1], turns[-1])
+
+def _strip_file_markers(t):
+    return re.sub(r'\[FILE:[^\]]+\]', '', t or '')
+
+def _iter_files(raw_text):
+    bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
+    seen = set()
+    for f in re.findall(r'\[FILE:([^\]]+)\]', raw_text or ''):
+        f = f.strip()
+        if not f or f.lower() in bad or f in seen:
+            continue
+        seen.add(f)
+        yield f
+
+def _split_wx_text(text, limit=_WX_TEXT_LIMIT):
+    text = (text or '').strip()
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind('\n', 0, limit)
+        if cut < limit * 0.6:
+            cut = text.rfind('。', 0, limit)
+        if cut < limit * 0.6:
+            cut = limit
+        parts.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text:
+        parts.append(text)
+    return parts
+
+def _visible_final_text(raw_text, has_files=False):
+    raw_text = raw_text or ''
+    if raw_text.strip() == '[超时]':
+        return '[超时]'
+    done, partial = _turn_parts(raw_text)
+    candidates = done + ([partial] if partial else [])
+    if not candidates:
+        candidates = [raw_text]
+    cleaned = []
+    for part in candidates:
+        text = _clean(_strip_file_markers(part))
+        if text and text != '...':
+            cleaned.append(text)
+    if cleaned:
+        return cleaned[-1]
+    return '已生成附件' if has_files else '任务已完成，但没有可展示的文本结果。'
 
 def on_message(bot, msg):
     text = bot.extract_text(msg).strip()
@@ -325,13 +422,39 @@ def on_message(bot, msg):
         agent.abort()
         _task_aborted[uid] = True
         print(f'[WX] /stop set _task_aborted[{uid}]', file=sys.__stdout__)
+        bot.send_text(uid, '已停止', context_token=ctx)
+        return
+    if text.replace(' ', '').lower() == '更新微信bot':
+        if not os.path.exists(_WECHAT_UPDATE_SCRIPT):
+            bot.send_text(uid, f'更新脚本不存在: {_WECHAT_UPDATE_SCRIPT}', context_token=ctx)
+            return
+        bot.send_text(uid, '开始更新微信 bot，完成后会再通知你。', context_token=ctx)
+        def _run_update():
+            log_file = os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GenericAgent', 'wechatapp.update.command.log')
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            env = {**os.environ, 'WECHAT_UPDATE_RESTART_DELAY': '5'}
+            with open(log_file, 'a', encoding='utf-8') as f:
+                proc = subprocess.Popen(['/bin/bash', _WECHAT_UPDATE_SCRIPT], cwd=_PROJECT_ROOT, env=env, stdout=f, stderr=subprocess.STDOUT)
+                rc = proc.wait()
+            try:
+                if rc == 0:
+                    bot.send_text(uid, '微信 bot 更新成功，5 秒后自动重启。重启后可继续发消息。', context_token=ctx)
+                else:
+                    bot.send_text(uid, f'微信 bot 更新失败或已跳过，退出码 {rc}。请查看日志: {log_file}', context_token=ctx)
+            except Exception as e:
+                print(f'[WX] update result send err: {e}', file=sys.__stdout__)
+        threading.Thread(target=_run_update, daemon=True).start()
+        return
+    if text == '/next':
+        info = agent.switch_llm(-1, persist=True)
+        bot.send_text(uid, f"切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", context_token=ctx)
         return
     if text.startswith('/llm'):
         args = text.split()
         if len(args) > 1:
             try:
-                n = int(args[1]); agent.next_llm(n)
-                bot.send_text(uid, f'切换到 [{agent.llm_no}] {agent.get_llm_name()}', context_token=ctx)
+                n = int(args[1]); info = agent.switch_llm(n, persist=True)
+                bot.send_text(uid, f"切换到 [{info['index']}] {info['display']}\n(下次 LLM turn 生效)", context_token=ctx)
             except (ValueError, IndexError):
                 bot.send_text(uid, f'用法: /llm <0-{len(agent.list_llms())-1}>', context_token=ctx)
         else:
@@ -345,13 +468,34 @@ def on_message(bot, msg):
         _typing_stop = threading.Event()
         def _keep_typing():
             ticket = bot.get_typing_ticket(uid, ctx)
-            if not ticket: return
+            if not ticket:
+                return
             while not _typing_stop.is_set():
                 try: bot.send_typing(uid, ticket)
                 except: pass
                 _typing_stop.wait(2.0)
         threading.Thread(target=_keep_typing, daemon=True).start()
-        result = ''; sent = 0; mi = 0; last_send = 0; item = {}
+        result = ''
+        sent = 0
+        item = {}
+
+        def _resolve_file_path(fpath):
+            if os.path.isabs(fpath):
+                return fpath
+            resolved = os.path.join(_TEMP_DIR, fpath)
+            return resolved if os.path.exists(resolved) else fpath
+
+        def _send_media_file(fpath):
+            if not os.path.exists(fpath):
+                raise FileNotFoundError(f"文件不存在: {fpath}")
+            ext = os.path.splitext(fpath)[1].lower()
+            if ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}:
+                bot.send_image(uid, fpath, context_token=ctx)
+            elif ext in {'.mp4', '.mov', '.m4v', '.webm'}:
+                bot.send_video(uid, fpath, context_token=ctx)
+            else:
+                bot.send_file(uid, fpath, context_token=ctx)
+
         def _wx_send(text):
             s = text.strip(); t0 = time.time()
             try:
@@ -361,13 +505,24 @@ def on_message(bot, msg):
             except Exception as e:
                 print(f'[WX] send err len={len(s)} dt={time.time()-t0:.1f}s {type(e).__name__}: {e}', file=sys.__stdout__)
                 return False
+
+        def _wx_send_parts(text):
+            ok = True
+            for part in _split_wx_text(text):
+                ok = _wx_send(part) and ok
+            return ok
+
         def _send(show):
             nonlocal mi, last_send
             now = time.time()
             if mi >= 9 or not show.strip(): return False
             if mi and now - last_send < 6 * mi: return None
-            if _wx_send(show[:3000]): mi += 1; last_send = time.time(); return True
+            if _wx_send_parts(show):
+                mi += 1; last_send = time.time(); return True
             return False
+
+        mi = 0
+        last_send = 0
         try:
             done = []; turn = 1
             while True:
@@ -388,21 +543,28 @@ def on_message(bot, msg):
         aborted = _task_aborted.pop(uid, False)
         tag = '[已停止]' if aborted else '[任务已完成]'
         rest = _clean('\n\n'.join(done[sent:] + ['\n\n' + tag]).strip())
-        if rest: _wx_send(rest[-3000:])
+        if rest: _wx_send_parts(rest)
 
-        files = re.findall(r'\[FILE:([^\]]+)\]', result)
-        bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
-        files = [f for f in files if f.strip().lower() not in bad and (f if os.path.isabs(f) else os.path.join(_TEMP_DIR, f)) not in media_paths]
-        for fpath in set(files):
-            if not os.path.isabs(fpath): fpath = os.path.join(_TEMP_DIR, fpath)
+        files = []
+        for f in _iter_files(result):
+            resolved = _resolve_file_path(f)
+            if resolved in media_paths:
+                continue
+            files.append(resolved)
+        if not rest and result:
+            visible_rest = _visible_final_text(result, has_files=bool(files))
+            if visible_rest.strip():
+                _wx_send_parts(visible_rest)
+        for fpath in files:
             try:
-                if not os.path.exists(fpath): raise FileNotFoundError(f"文件不存在: {fpath}")
-                ext = os.path.splitext(fpath)[1].lower()
-                sender = bot.send_video if ext in {'.mp4', '.mov', '.m4v', '.webm'} else \
-                         bot.send_image if ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'} else bot.send_file
-                sender(uid, fpath, context_token=ctx)
+                _send_media_file(fpath)
                 print(f'[WX] sent media: {fpath}', file=sys.__stdout__)
-            except Exception as e: print(f'[WX] send media err: {e}', file=sys.__stdout__)
+            except Exception as e:
+                print(f'[WX] send media err: {e}', file=sys.__stdout__)
+                try:
+                    bot.send_text(uid, f'📎 {os.path.basename(fpath)}（发送失败: {e}）', context_token=ctx)
+                except Exception as send_err:
+                    print(f'[WX] send media fallback err: {send_err}', file=sys.__stdout__)
 
     threading.Thread(target=_handle, daemon=True).start()
 

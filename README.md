@@ -113,14 +113,14 @@ Every time GenericAgent solves a new task, it automatically crystallizes the exe
 
 > ⚠️ **Python version**: use **Python 3.11 or 3.12**. **Do not** use Python 3.14 — it is incompatible with `pywebview` and a few other GA dependencies.
 >
-> 📖 Detailed installation guide: **[installation.md](docs/installation.md)** · **[installation_zh.md（中文）](docs/installation_zh.md)**
+> 📖 Usage guide: **[docs/README.md](docs/README.md)**
 
 ### For LLM Agents
 
-Fetch the installation guide and follow it:
+Fetch the usage guide and follow it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/installation.md
+curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/README.md
 ```
 
 ### For Humans
@@ -160,7 +160,7 @@ python launch.pyw
 
 > 💡 GenericAgent is meant to grow its environment **through the Agent itself**, not by pre-installing every possible package.
 
-📖 Full guide: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
+📖 Full guide: [`docs/README.md`](docs/README.md)
 
 ---
 
@@ -488,14 +488,14 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for full text.
 
 > ⚠️ **Python 版本：** 推荐使用 **Python 3.11 或 3.12**。**请不要使用 Python 3.14**，与 `pywebview` 及部分依赖不兼容。
 >
-> 📖 详细安装指南：**[installation_zh.md（中文）](docs/installation_zh.md)** · **[installation.md (English)](docs/installation.md)**
+> 📖 使用文档：**[docs/README.md](docs/README.md)**
 
 ### 给 LLM Agent 看的
 
-获取安装指南并照做：
+获取使用文档并照做：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/installation_zh.md
+curl -fsSL https://raw.githubusercontent.com/lsdefine/GenericAgent/refs/heads/main/docs/README.md
 ```
 
 ### 给人类用户看的
@@ -535,7 +535,7 @@ python launch.pyw
 
 > 💡 GenericAgent 更推荐由 **Agent 在使用中自举环境**，而不是预先手动装完整依赖。
 
-📖 完整引导流程见 [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
+📖 完整引导流程见 [`docs/README.md`](docs/README.md)
 📖 新手图文版：[飞书文档](https://my.feishu.cn/wiki/CGrDw0T76iNFuskmwxdcWrpinPb)
 📘 完整入门教程（Datawhale 出品）：[Hello GenericAgent](https://datawhalechina.github.io/hello-generic-agent/) · [GitHub](https://github.com/datawhalechina/hello-generic-agent)
 
@@ -590,7 +590,145 @@ GenericAgent 支持 Telegram、微信、QQ、飞书 / Lark、企业微信、钉�
 | 企业微信 | `python frontends/wecomapp.py` |
 | 钉钉 | `python frontends/dingtalkapp.py` |
 
-> 详细配置直接问 GenericAgent。
+### 微信 Bot（个人微信）
+
+无需额外配置，扫码登录即可：
+
+```bash
+pip install -e ".[wechat]"
+python frontends/wechatapp.py
+```
+
+> 首次启动会弹出二维码，用微信扫码完成绑定。之后通过微信消息与 Agent 交互。
+
+### macOS 开机自启（推荐）
+
+如果你希望电脑登录后自动启动微信前端，并在异常退出时自动拉起：
+
+```bash
+bash assets/install-wechat-launchagent.sh
+```
+
+手动停止：
+
+```bash
+bash assets/stop-wechat-launchagent.sh
+```
+
+查看状态：
+
+```bash
+bash assets/status-wechat-launchagent.sh
+```
+
+安装后也可以直接用快捷命令：
+
+```bash
+ga wechat start
+ga wechat stop
+ga wechat status
+```
+
+卸载自启：
+
+```bash
+bash assets/uninstall-wechat-launchagent.sh
+```
+
+日志位置：
+
+- `~/Library/Logs/GenericAgent/wechatapp.launchd.log`
+- `~/Library/Logs/GenericAgent/wechatapp.launchd.out.log`
+- `~/Library/Logs/GenericAgent/wechatapp.launchd.err.log`
+- `temp/wechatapp.log`
+
+### Telegram Bot 开机自启
+
+先在 `mykey.py` 配置 `tg_bot_token` 和非空 `tg_allowed_users`，然后安装 LaunchAgent：
+
+```bash
+bash assets/install-telegram-launchagent.sh
+```
+
+安装后可用快捷命令管理：
+
+```bash
+ga telegram start
+ga telegram stop
+ga telegram status
+ga telegram update
+```
+
+也可以在 Telegram 中发送 `更新纸飞机bot` 触发更新。
+
+### QQ Bot
+
+使用 `qq-botpy` WebSocket 长连接，**无需公网 webhook**：
+
+```bash
+pip install qq-botpy
+```
+
+在 `mykey.py` 中补充：
+
+```python
+qq_app_id = "YOUR_APP_ID"
+qq_app_secret = "YOUR_APP_SECRET"
+qq_allowed_users = ["YOUR_USER_OPENID"]  # 或 ['*'] 公开访问
+```
+
+```bash
+python frontends/qqapp.py
+```
+
+> 在 [QQ 开放平台](https://q.qq.com) 创建机器人获取 AppID / AppSecret。首次消息后，用户 openid 记录于 `temp/qqapp.log`。
+
+### 飞书（Lark）
+
+```bash
+pip install lark-oapi
+python frontends/fsapp.py
+```
+
+```python
+fs_app_id = "cli_xxx"
+fs_app_secret = "xxx"
+fs_allowed_users = ["ou_xxx"]  # 或 ['*']
+```
+
+**入站支持**：文本、富文本 post、图片、文件、音频、media、交互卡片 / 分享卡片  
+**出站支持**：流式进度卡片、图片回传、文件 / media 回传  
+**视觉模型**：图片首轮以真正的多模态输入发送给兼容 OpenAI Vision 的后端
+
+更多日常使用方式见 [docs/README.md](docs/README.md)
+
+
+### 企业微信（WeCom）
+
+```bash
+pip install wecom_aibot_sdk
+python frontends/wecomapp.py
+```
+
+```python
+wecom_bot_id = "your_bot_id"
+wecom_secret = "your_bot_secret"
+wecom_allowed_users = ["your_user_id"]
+wecom_welcome_message = "你好，我在线上。"
+```
+
+### 钉钉（DingTalk）
+
+```bash
+pip install dingtalk-stream
+python frontends/dingtalkapp.py
+```
+
+```python
+dingtalk_client_id = "your_app_key"
+dingtalk_client_secret = "your_app_secret"
+dingtalk_allowed_users = ["your_staff_id"]  # 或 ['*']
+```
 
 ### 通用聊天命令
 

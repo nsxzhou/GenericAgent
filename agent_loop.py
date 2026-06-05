@@ -39,7 +39,13 @@ def get_pretty_json(data):
         data = data.copy(); data["script"] = data["script"].replace("; ", ";\n  ")
     return json.dumps(data, indent=2, ensure_ascii=False).replace('\\n', '\n')
 
-def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
+def _maybe_call(value):
+    return value() if callable(value) else value
+
+def _resolve_client(client_or_agent):
+    return getattr(client_or_agent, 'llmclient', client_or_agent)
+
+def agent_runner_loop(client_or_agent, system_prompt, user_input, handler, tools_schema,
                       max_turns=40, verbose=True, initial_user_content=None, yield_info=False):
     messages = [
         {"role": "system", "content": system_prompt},
@@ -48,15 +54,24 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema,
     turn = 0;  handler.max_turns = max_turns
     _hook('agent_before', locals())
     while turn < handler.max_turns:
+        client = _resolve_client(client_or_agent)
+        if client is None:
+            raise RuntimeError('No active LLM client is available')
+        current_system_prompt = _maybe_call(system_prompt)
+        current_tools_schema = _maybe_call(tools_schema)
+        if messages and messages[0].get('role') == 'system':
+            messages[0] = {"role": "system", "content": current_system_prompt}
+        else:
+            messages = [{"role": "system", "content": current_system_prompt}] + messages
         turn += 1; turnstr = f'LLM Running (Turn {turn}) ...'
         if handler.parent.task_dir: turnstr = f'Turn {turn} ...'
         if verbose: turnstr = f'**{turnstr}**'
         if yield_info: yield {'turn': turn}
         yield f"\n\n{turnstr}\n\n"
-        if turn%10 == 0: client.last_tools = ''  # 每10轮重置一次工具描述
+        if turn%10 == 0: client.last_tools = ''  # 每10轮重置一次工具描述，避免上下文过大导致的模型性能下降
         _hook('turn_before', locals())
         _hook('llm_before', locals())
-        response_gen = client.chat(messages=messages, tools=tools_schema)
+        response_gen = client.chat(messages=messages, tools=current_tools_schema)
         if verbose:
             response = yield from response_gen
             yield '\n\n'
