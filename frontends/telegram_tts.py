@@ -35,6 +35,7 @@ _MD_DECORATION_RE = re.compile(r"(\*\*|__|~~|\*)")
 _GENERATED_FILE_RE = re.compile(r"^\s*(生成文件|已生成附件|附件)[:：].*$", re.MULTILINE)
 _WHITESPACE_RE = re.compile(r"[ \t\r\f\v]+")
 _PARAGRAPH_RE = re.compile(r"\n{3,}")
+_TTS_BLOCK_RE = re.compile(r"<tts>([\s\S]*?)</tts>")
 
 
 class TelegramTTS:
@@ -128,8 +129,28 @@ class TelegramTTS:
         text = _PARAGRAPH_RE.sub("\n\n", text).strip()
         return text
 
+    def _extract_tts_block(self, raw_text):
+        """Extract the last <tts>...</tts> block from the LLM response."""
+        matches = list(_TTS_BLOCK_RE.finditer(raw_text or ""))
+        if not matches:
+            return None
+        return matches[-1].group(1).strip()
+
+    def clean_text_for_tts_light(self, text):
+        """Light cleaning for LLM-generated TTS text — collapse whitespace only."""
+        text = text or ""
+        text = _WHITESPACE_RE.sub(" ", text)
+        text = "\n".join(line.strip() for line in text.splitlines())
+        text = _PARAGRAPH_RE.sub("\n\n", text).strip()
+        return text
+
     def split_text_for_tts(self, text, max_chunks=MAX_TTS_CHUNKS, limit=MAX_TTS_CHARS):
-        text = self.clean_text_for_tts(text)
+        # Prefer LLM-generated <tts> block if present
+        tts_block = self._extract_tts_block(text)
+        if tts_block:
+            text = self.clean_text_for_tts_light(tts_block)
+        else:
+            text = self.clean_text_for_tts(text)
         if not text:
             return []
         chunks = []

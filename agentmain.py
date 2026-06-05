@@ -139,6 +139,16 @@ class GenericAgent:
         prompt = get_system_prompt() + extra
         if getattr(self, 'peer_hint', False):
             prompt += "\n[Peer] 用户提及其他会话/后台任务状态时: temp/model_responses/ (只找近期修改的文件尾部)\n"
+        if getattr(self, '_current_source', '') == 'telegram':
+            prompt += (
+                "\n## TTS 语音输出\n"
+                "每次回复的最后，用 <tts> 标签附上一段适合语音朗读的纯文本。规则：\n"
+                "- 使用自然口语，不要用任何 Markdown 语法（无 #、*、-、`、[]() 等）\n"
+                "- 不要包含代码、文件路径、URL；如有代码，用一句话概括它做了什么\n"
+                "- 控制在 500 字以内；如果回复很长，提炼关键结论即可\n"
+                "- 如果回复纯粹是操作状态（如"已切换模型""已停止"），直接朗读原文\n"
+                "- 不要朗读 <thinking>、<tool_use> 等内部标签的内容\n"
+            )
         return prompt
 
     def load_llm_sessions(self):
@@ -274,6 +284,7 @@ class GenericAgent:
             if raw_query is None:
                 self.task_queue.task_done(); continue
             self.is_running = True
+            self._current_source = source
             if len(raw_query) > 1500:
                 task_file = os.path.join(script_dir, 'temp', f'user_prompt_{int(time.time())}.md')
                 with open(task_file, 'w', encoding='utf-8') as f: f.write(raw_query)
