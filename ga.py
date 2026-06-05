@@ -10,7 +10,11 @@ from agent_loop import BaseHandler, StepOutcome, json_default
 from llmcore import openai_compatible_image_generation, reload_mykeys
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop_signal=None, maxlen=10000):
+def safe_print(*args, **kwargs):
+    try: print(*args, **kwargs)
+    except: pass
+
+def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop_signal=None, maxlen=10000, myprint=safe_print):
     """代码执行器
     python: 运行复杂的 .py 脚本（文件模式）
     powershell/bash: 运行单行指令（命令模式）
@@ -34,7 +38,7 @@ def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop
         else: cmd = ["bash", "-c", code]
     else:
         return {"status": "error", "msg": f"不支持的类型: {code_type}"}
-    print("code run output:") 
+    myprint("code run output:")
     startupinfo = None
     if os.name == 'nt':
         startupinfo = subprocess.STARTUPINFO()
@@ -48,8 +52,7 @@ def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop
                 try: line = line_bytes.decode('utf-8')
                 except UnicodeDecodeError: line = line_bytes.decode('gbk', errors='ignore')
                 logs.append(line)
-                try: print(line, end="") 
-                except: pass
+                myprint(line, end="")
         except: pass
 
     try:
@@ -66,7 +69,7 @@ def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop
             istimeout = time.time() - start_t > timeout
             if istimeout or stop_signal:
                 process.kill()
-                print("[Debug] Process killed due to timeout or stop signal.")
+                myprint("[Debug] Process killed due to timeout or stop signal.")
                 if istimeout: full_stdout.append("\n[Timeout Error] 超时强制终止")
                 else: full_stdout.append("\n[Stopped] 用户强制终止")
                 break
@@ -369,6 +372,7 @@ class GenericAgentHandler(BaseHandler):
         self.history_info = last_history if last_history else []
         self.code_stop_signal = []
         self._done_hooks = []
+        self.print = safe_print
 
     def _get_abs_path(self, path):
         if not path: return ""
@@ -402,7 +406,7 @@ class GenericAgentHandler(BaseHandler):
                     except SyntaxError: exec(code, ns); result = ns.get('_r', 'OK')
                 except Exception as e: result = f'Error: {e}'
             finally: os.chdir(old_cwd)
-        else: result = yield from code_run(code, code_type, timeout, cwd, code_cwd=code_cwd, stop_signal=self.code_stop_signal, maxlen=maxlen)
+        else: result = yield from code_run(code, code_type, timeout, cwd, code_cwd=code_cwd, stop_signal=self.code_stop_signal, maxlen=maxlen, myprint=self.print)
         next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
         return StepOutcome(result, next_prompt=next_prompt)
 
@@ -477,8 +481,7 @@ class GenericAgentHandler(BaseHandler):
                 result["js_return"] += f"\n\n[已保存完整内容到 {abs_path}]"
             except: result['js_return'] += f"\n\n[保存失败，无法写入文件 {abs_path}]"
         show = smart_format(json.dumps(result, ensure_ascii=False, indent=2, default=json_default), max_str_len=300)
-        try: print("Web Execute JS Result:", show)
-        except: pass
+        self.print("Web Execute JS Result:", show)
         yield f"JS 执行结果:\n{show}\n"
         next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
         result = json.dumps(result, ensure_ascii=False, default=json_default)
@@ -556,7 +559,8 @@ class GenericAgentHandler(BaseHandler):
     def _exit_plan_mode(self): self.working.pop('in_plan_mode', None)
     def enter_plan_mode(self, plan_path): 
         self.working['in_plan_mode'] = plan_path; self.max_turns = 100
-        print(f"[Info] Entered plan mode with plan file: {plan_path}"); return plan_path
+        self.print(f"[Info] Entered plan mode with plan file: {plan_path}")
+        return plan_path
     def _check_plan_completion(self):
         if not os.path.isfile(p:=self._in_plan_mode() or ''): return None
         try: return len(re.findall(r'\[ \]', open(p, encoding='utf-8', errors='replace').read()))
@@ -759,7 +763,7 @@ class GenericAgentHandler(BaseHandler):
                 flush(); parts.append(line); cnt = 0; last = ''
             else: cnt += 1; last = line
         flush()
-        return "\n".join(parts[-100:])
+        return "\n".join(parts[-70:])
 
     def _get_anchor_prompt(self, skip=False):
         if skip: return "\n"
@@ -770,9 +774,7 @@ class GenericAgentHandler(BaseHandler):
         prompt += f"\nCurrent turn: {self.current_turn}\n"
         if self.working.get('key_info'): prompt += f"\n<key_info>{self.working.get('key_info')}</key_info>"
         if self.working.get('related_sop'): prompt += f"\n有不清晰的地方请再次读取{self.working.get('related_sop')}"
-        if getattr(self.parent, 'verbose', False):
-            try: print(prompt)
-            except: pass
+        if getattr(self.parent, 'verbose', False): self.print(prompt)
         return prompt
     
     def turn_end_callback(self, response, tool_calls, tool_results, turn, next_prompt, exit_reason):
