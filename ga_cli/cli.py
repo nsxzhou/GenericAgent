@@ -44,6 +44,30 @@ def launch_frontend(cmd_parts, args=None):
         sys.exit(0)
 
 
+BOT_TARGETS = {
+    "telegram": {"label": "Telegram bot", "prefix": "telegram"},
+    "wechat": {"label": "WeChat bot", "prefix": "wechat"},
+}
+
+BOT_ACTIONS = ["status", "start", "stop", "install", "uninstall", "update"]
+
+
+def cmd_bot(target, action):
+    """Dispatch bot management commands to LaunchAgent shell scripts."""
+    if action not in BOT_ACTIONS:
+        print(f"❌ 未知操作: {action}")
+        print(f"   可用操作: {', '.join(BOT_ACTIONS)}")
+        sys.exit(1)
+    prefix = BOT_TARGETS[target]["prefix"]
+    script = os.path.join(PROJECT_DIR, "assets", f"{action}-{prefix}-launchagent.sh")
+    if not os.path.exists(script):
+        print(f"❌ 脚本不存在: {script}")
+        sys.exit(1)
+    os.chdir(PROJECT_DIR)
+    proc = subprocess.run(["/bin/bash", script])
+    sys.exit(proc.returncode)
+
+
 COMMANDS = {
     "gui": {
         "help": "启动桌面GUI (qtapp)",
@@ -79,6 +103,20 @@ COMMANDS = {
         "help": "启动 webview 桌面壳 (launch.pyw)",
         "desc": "以原生窗口形式包装 stapp Web 界面（基于 pywebview）",
         "cmd": ["python", "{PROJECT_DIR}/launch.pyw"],
+    },
+    "telegram": {
+        "help": "管理 Telegram bot (LaunchAgent)",
+        "desc": "管理 Telegram bot 的 LaunchAgent 服务: status/start/stop/install/uninstall/update",
+        "cmd": None,
+        "internal": True,
+        "bot_target": "telegram",
+    },
+    "wechat": {
+        "help": "管理 WeChat bot (LaunchAgent)",
+        "desc": "管理 WeChat bot 的 LaunchAgent 服务: status/start/stop/install/uninstall/update",
+        "cmd": None,
+        "internal": True,
+        "bot_target": "wechat",
     },
     "status": {
         "help": "检查运行状态",
@@ -199,6 +237,12 @@ def main():
         sys.exit(1)
 
     info = COMMANDS[cmd]
+
+    # bot management commands (telegram, wechat)
+    if info.get("bot_target"):
+        action = (args.args[0] if args.args else "status")
+        cmd_bot(info["bot_target"], action)
+        return
 
     # 内置命令走内部逻辑
     if info.get("internal"):
